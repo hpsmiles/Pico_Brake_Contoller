@@ -88,5 +88,4 @@ This project is provided as-is for personal use.
 ## References & Inspiration
 
 - [LandoCode89/Jack-Pneumatic](https://github.com/LandoCode89/Jack-Pneumatic) — ESP32-S3 + ADS1220 24-bit ADC pneumatic brake controller (GPL v3)
-- [u/Lando_Read89 — Reddit build guide](https://www.reddit.com/r/simracing/comments/1jb9z0s/pneumatic_brake_mod_for_sim_sonn_pro_pedal/) — Sim Sonn Pro pneumatic brake mod
-- [u/GeneralLegacy — Reddit discussion](https://www.reddit.com/r/simracing/comments/1hxl5qj/diy_pneumatic_brake_mod/) — DIY pneumatic brake mod approach
+- [u/Lando_Read89 — Pneumatic mod for Sim Jack/SimSonn pedals](https://www.reddit.com/r/simracing/comments/1l1h13a/pneumatic_mod_for_sim_jacksimsonn_pedals/) — Reddit post that inspired this project
