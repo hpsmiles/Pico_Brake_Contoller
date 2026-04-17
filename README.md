@@ -2,6 +2,8 @@
 
 Pneumatic brake mod for the Sim Sonn Pro brake pedal. Uses a Raspberry Pi Pico with an XDB401 pressure sensor, CircuitPython firmware, and a PC-side calibration GUI.
 
+**Current release:** v0.1 (pre-release)
+
 ## Quick Start
 
 ### Hardware Setup
@@ -22,13 +24,28 @@ Pneumatic brake mod for the Sim Sonn Pro brake pedal. Uses a Raspberry Pi Pico w
 
 1. Install GUI dependencies: `pip install -r gui/requirements.txt`
 2. Run: `python gui/calibrator.py`
-3. Use Auto Calibrate (3 cycles) or manually set min/max
-4. Click "Save to Pico" → press RESET on Pico
+3. Select your Pico from the device dropdown (auto-detected if name contains "pico")
+4. Use Auto Calibrate or manually set min/max
+5. Tune curve, smoothing, deadzone — the green **Preview** line shows the effect instantly
+6. Click "Save to Pico" → press RESET on Pico → the red Game Input line matches the Preview
+
+### Testing Without a Sensor
+
+- Jumper GP26 to GND for 0%, or to 3.3V for ~82% (due to voltage divider scaling)
+- Touch GP26 with a finger for visible noise on the graph
 
 ### In-Game Configuration
 
 - In your sim (ACC / iRacing / LMU), map the gamepad X-axis to brake
 - The Pico appears as a standard USB gamepad
+
+## Graph Lines
+
+| Color | Line | Source |
+|-------|------|--------|
+| Blue | Raw ADC | Unprocessed sensor reading from Y-axis |
+| Green | Preview | Current slider settings applied locally (real-time) |
+| Red | Game Input | Actual Pico output (X-axis, after save + reboot) |
 
 ## Brake Curves
 
@@ -44,11 +61,21 @@ Pneumatic brake mod for the Sim Sonn Pro brake pedal. Uses a Raspberry Pi Pico w
 |---------|---------|-------------|
 | raw_min | 2000 | ADC value at zero pressure |
 | raw_max | 56000 | ADC value at max pressure |
-| deadzone | 300 | Ignore values below this threshold |
+| deadzone | 300 | Ignore values below this threshold (prevents ghost presses) |
 | curve | progressive | Brake response curve |
-| smoothing | 0.3 | EMA alpha (0=no smoothing, 1=no filtering) |
+| smoothing | 0.3 | EMA smoothing (0 = none, 0.95 = max). Higher = more filtered but more lag |
 | invert | false | Flip brake axis |
-| oversample | 16 | ADC samples per reading (16 = ~14-bit effective) |
+| oversample | 16 | ADC samples per reading (16 = ~14-bit effective resolution) |
+
+## Building the GUI Executable
+
+```bash
+uv venv .venv
+.venv\Scripts\pip install pygame-ce pyinstaller
+.venv\Scripts\pyinstaller --onefile --windowed --name BrakeCalibrator --distpath dist gui/calibrator.py
+```
+
+Output: `dist/BrakeCalibrator.exe` (~18MB)
 
 ## Cost
 
