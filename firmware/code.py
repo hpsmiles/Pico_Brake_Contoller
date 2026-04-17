@@ -154,8 +154,8 @@ while True:
     # 5. Apply brake curve
     normalized = apply_curve(normalized, cal["curve"])
 
-    # 6. EMA smoothing
-    alpha = cal["smoothing"]
+    # 6. EMA smoothing (smoothing 0 = none, 0.95 = max; alpha = 1 - smoothing)
+    alpha = 1.0 - min(cal["smoothing"], 0.95)
     if not ema_initialized:
         ema_value = normalized
         ema_initialized = True

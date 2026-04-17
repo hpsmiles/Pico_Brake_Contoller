@@ -90,27 +90,46 @@ class PicoReader:
         pygame.init()
         pygame.joystick.init()
         self.joystick = None
-        self._connect()
+        self._devices = []  # List of (index, name) tuples
+        self._scan_devices()
+        self._auto_select_pico()
 
-    def _connect(self):
-        """Connect to the first available joystick (should be the Pico)."""
-        if pygame.joystick.get_count() > 0:
-            self.joystick = pygame.joystick.Joystick(0)
+    def _scan_devices(self):
+        """Scan all connected joysticks and store their names."""
+        self._devices = []
+        for i in range(pygame.joystick.get_count()):
+            js = pygame.joystick.Joystick(i)
+            js.init()
+            self._devices.append((i, js.get_name()))
+
+    def _auto_select_pico(self):
+        """Try to auto-select a device with 'pico' in the name."""
+        for idx, name in self._devices:
+            if "pico" in name.lower():
+                self.select_device(idx)
+                return
+        # Fallback: select first device if any
+        if self._devices:
+            self.select_device(0)
+
+    def list_devices(self):
+        """Return list of (index, name) tuples for all connected joysticks."""
+        return list(self._devices)
+
+    def select_device(self, index):
+        """Connect to a specific joystick by index."""
+        pygame.event.pump()
+        if 0 <= index < pygame.joystick.get_count():
+            self.joystick = pygame.joystick.Joystick(index)
             self.joystick.init()
 
     def read_axis(self, axis=0):
         """Read the specified axis value. Returns float 0.0-1.0 or None."""
         pygame.event.pump()
         if self.joystick is None:
-            # Try reconnecting
-            self._connect()
-            if self.joystick is None:
-                return None
+            return None
         try:
-            # pygame normalizes axes to -1.0 to 1.0 for gamepads
-            # Our 16-bit axes send 0-65535, pygame maps to 0.0-1.0 (first half of -1 to 1)
             raw = self.joystick.get_axis(axis)
-            # Map from pygame's -1..1 to our 0..1
             return (raw + 1.0) / 2.0
         except Exception:
             return None
@@ -139,6 +158,12 @@ class PicoReader:
         if self.joystick:
             return self.joystick.get_name()
         return "Not connected"
+
+    @property
+    def selected_index(self):
+        if self.joystick is not None:
+            return self.joystick.get_id()
+        return -1
 
     def quit(self):
         pygame.quit()
@@ -173,16 +198,20 @@ class BrakeCalibrator(tk.Tk):
         self.reader = PicoReader()
         self.circuitpy_drive = find_circuitpy_drive()
         self.auto_calibrating = False
-        self.cal_cycle = 0
-        self.cal_phase = "idle"  # idle, min_capture, max_capture, done
-        self.captured_mins = []  # Per-cycle minimums
-        self.captured_maxs = []  # Per-cycle maximums
-        self.capture_samples = []  # Samples within current capture window
+        self.cal_phase = "idle"  # idle, countdown, capture, done
+        self.capture_samples = []
+        self.countdown_start = 0
         self.capture_start = 0
 
-        # Pressure history for the live graph
-        self.pressure_history = []
+        # Pressure history for the live graph — three lines
+        self.raw_history = []  # Raw ADC values (0-1)
+        self.brake_history = []  # Processed brake values from Pico (0-1)
+        self.preview_history = []  # Locally computed preview (0-1)
         self.HISTORY_LENGTH = 200
+
+        # EMA state for preview line
+        self._preview_ema = 0.0
+        self._preview_ema_init = False
 
         self._build_ui()
         self._update_status()
@@ -211,8 +240,27 @@ class BrakeCalibrator(tk.Tk):
         self.norm_label = ttk.Label(info_frame, text="Brake: --")
         self.norm_label.pack(side=tk.LEFT, padx=5)
 
-        self.device_label = ttk.Label(info_frame, text="Device: --")
-        self.device_label.pack(side=tk.RIGHT, padx=5)
+        # Device selector
+        device_frame = ttk.Frame(left)
+        device_frame.pack(fill=tk.X, pady=(5, 0))
+
+        ttk.Label(device_frame, text="Device:").pack(side=tk.LEFT, padx=5)
+        devices = self.reader.list_devices()
+        device_names = [f"{i}: {name}" for i, name in devices]
+        self.device_var = tk.StringVar()
+        if devices:
+            self.device_var.set(
+                f"{self.reader.selected_index}: {self.reader.device_name}"
+            )
+        self.device_combo = ttk.Combobox(
+            device_frame,
+            textvariable=self.device_var,
+            values=device_names,
+            state="readonly",
+            width=40,
+        )
+        self.device_combo.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.device_combo.bind("<<ComboboxSelected>>", self._on_device_selected)
 
         # Right panel — controls
         right = ttk.LabelFrame(main, text="Calibration", padding=5)
@@ -276,7 +324,7 @@ class BrakeCalibrator(tk.Tk):
         smoothing_scale = ttk.Scale(
             settings_frame,
             from_=0.0,
-            to=1.0,
+            to=0.95,
             variable=self.smoothing_var,
             orient=tk.HORIZONTAL,
         )
@@ -327,11 +375,72 @@ class BrakeCalibrator(tk.Tk):
         )
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
+    def _on_device_selected(self, event=None):
+        """Handle device selection from dropdown."""
+        selection = self.device_var.get()
+        if selection:
+            try:
+                index = int(selection.split(":")[0])
+                self.reader.select_device(index)
+            except (ValueError, IndexError):
+                pass
+
     def _update_smoothing_label(self, *args):
         try:
             self.smoothing_label.config(text=f"α = {self.smoothing_var.get():.2f}")
         except Exception:
             pass
+
+    def _compute_preview(self, raw_01):
+        """Apply the current slider settings to a raw ADC value (0-1).
+
+        Mirrors the firmware pipeline: clamp → normalize → deadzone → curve → EMA.
+        Returns the previewed value (0-1).
+        """
+        raw_min = self.raw_min_var.get()
+        raw_max = self.raw_max_var.get()
+
+        # Convert 0-1 back to raw ADC integer range
+        raw_int = int(raw_01 * 65535)
+
+        # Clamp
+        clamped = max(raw_min, min(raw_max, raw_int))
+
+        # Normalize
+        if raw_max == raw_min:
+            normalized = 0.0
+        else:
+            normalized = (clamped - raw_min) / (raw_max - raw_min)
+
+        # Deadzone
+        dz = self.deadzone_var.get()
+        deadzone_frac = dz / (raw_max - raw_min) if raw_max != raw_min else 0.0
+        if normalized < deadzone_frac:
+            normalized = 0.0
+        elif deadzone_frac > 0:
+            normalized = (normalized - deadzone_frac) / (1.0 - deadzone_frac)
+
+        # Curve
+        curve = self.curve_var.get()
+        if curve == "linear":
+            pass
+        elif curve == "progressive":
+            normalized = normalized * normalized
+        elif curve == "aggressive":
+            normalized = normalized**0.5
+
+        # EMA smoothing (smoothing 0 = none, 0.95 = max; alpha = 1 - smoothing)
+        alpha = 1.0 - min(self.smoothing_var.get(), 0.95)
+        if not self._preview_ema_init:
+            self._preview_ema = normalized
+            self._preview_ema_init = True
+        else:
+            self._preview_ema = alpha * normalized + (1.0 - alpha) * self._preview_ema
+
+        # Invert
+        if self.invert_var.get():
+            return 1.0 - self._preview_ema
+        return self._preview_ema
 
     def _update_status(self):
         """Update drive and device status."""
@@ -360,82 +469,75 @@ class BrakeCalibrator(tk.Tk):
 
     def _start_auto_cal(self):
         """Begin auto-calibration flow."""
-        self.auto_calibrating = True
-        self.cal_cycle = 0
-        self.captured_mins = []  # Per-cycle minimums
-        self.captured_maxs = []  # Per-cycle maximums
-        self.capture_samples = []  # Samples within current capture window
-        self.cal_phase = "min_capture"
-        self.capture_start = time.monotonic()
-        self.auto_cal_label.config(
-            text="Cycle 1/3: Release brake completely...\nCapturing MIN (2s)..."
+        result = messagebox.showinfo(
+            "Auto Calibrate",
+            "Press OK, then release the brake completely.\n\n"
+            "After the countdown, press and release the brake\n"
+            "firmly within 5 seconds.",
         )
+        # Start countdown phase
+        self.auto_calibrating = True
+        self.cal_phase = "countdown"
+        self.countdown_start = time.monotonic()
+        self.capture_samples = []
         self.auto_cal_btn.config(state=tk.DISABLED)
 
     def _process_auto_cal(self):
         """Process auto-calibration state machine.
 
-        For each capture window, we track all samples then take the
-        min (or max) of that window. Final values are the average
-        across 3 cycles.
+        Phases: countdown (3s) → capture (5s) → done
+        During capture, track min and max raw ADC values.
         """
         if not self.auto_calibrating:
             return
 
-        elapsed = time.monotonic() - self.capture_start
-        # Read raw ADC value (axis 1) for calibration
-        current_raw = self.reader.read_raw_adc_int()
+        elapsed = (
+            time.monotonic() - self.countdown_start
+            if self.cal_phase == "countdown"
+            else time.monotonic() - self.capture_start
+        )
 
-        if self.cal_phase == "min_capture":
-            if current_raw is not None:
-                self.capture_samples.append(current_raw)
-            if elapsed >= 2.0:
-                # Take minimum of all samples in this window
-                window_min = (
-                    min(self.capture_samples)
-                    if self.capture_samples
-                    else self.DEFAULTS["raw_min"]
+        if self.cal_phase == "countdown":
+            remaining = 3 - int(elapsed)
+            if remaining > 0:
+                self.auto_cal_label.config(
+                    text=f"Release brake completely...\n{remaining}..."
                 )
-                self.captured_mins.append(window_min)
-                self.capture_samples = []
-                self.cal_phase = "max_capture"
+            else:
+                # Switch to capture phase
+                self.cal_phase = "capture"
                 self.capture_start = time.monotonic()
                 self.auto_cal_label.config(
-                    text=f"Cycle {self.cal_cycle + 1}/3: Press brake to MAX...\nCapturing MAX (4s)..."
+                    text="Capturing... press and release brake now!"
                 )
 
-        elif self.cal_phase == "max_capture":
+        elif self.cal_phase == "capture":
+            # Read raw ADC value (axis 1) for calibration
+            current_raw = self.reader.read_raw_adc_int()
             if current_raw is not None:
                 self.capture_samples.append(current_raw)
-            if elapsed >= 4.0:
-                # Take maximum of all samples in this window
-                window_max = (
-                    max(self.capture_samples)
-                    if self.capture_samples
-                    else self.DEFAULTS["raw_max"]
+
+            remaining = 5 - int(elapsed)
+            if remaining > 0:
+                self.auto_cal_label.config(
+                    text=f"Capturing... press and release brake!\n{remaining}s remaining"
                 )
-                self.captured_maxs.append(window_max)
-                self.capture_samples = []
-                self.cal_cycle += 1
-                if self.cal_cycle >= 3:
-                    # All 3 cycles done — compute averages across cycles
-                    avg_min = sum(self.captured_mins) // len(self.captured_mins)
-                    avg_max = sum(self.captured_maxs) // len(self.captured_maxs)
-                    self.raw_min_var.set(avg_min)
-                    self.raw_max_var.set(avg_max)
-                    self.auto_calibrating = False
-                    self.cal_phase = "done"
+            else:
+                # Capture done — compute min and max
+                if self.capture_samples:
+                    captured_min = min(self.capture_samples)
+                    captured_max = max(self.capture_samples)
+                    self.raw_min_var.set(captured_min)
+                    self.raw_max_var.set(captured_max)
                     self.auto_cal_label.config(
-                        text=f"Done! Min={avg_min}, Max={avg_max}\nTweak values if needed, then Save."
+                        text=f"Done! Min={captured_min}, Max={captured_max}\nTweak if needed, then Save."
                     )
-                    self.auto_cal_btn.config(state=tk.NORMAL)
                 else:
-                    # Next cycle
-                    self.cal_phase = "min_capture"
-                    self.capture_start = time.monotonic()
-                    self.auto_cal_label.config(
-                        text=f"Cycle {self.cal_cycle + 1}/3: Release brake...\nCapturing MIN (2s)..."
-                    )
+                    self.auto_cal_label.config(text="No data captured. Try again.")
+
+                self.auto_calibrating = False
+                self.cal_phase = "done"
+                self.auto_cal_btn.config(state=tk.NORMAL)
 
     def _save_calibration(self):
         """Write calibration.json to the CIRCUITPY drive."""
@@ -467,7 +569,7 @@ class BrakeCalibrator(tk.Tk):
             messagebox.showerror("Error", f"Could not write to CIRCUITPY:\n{e}")
 
     def _draw_graph(self):
-        """Draw the live pressure graph on the canvas."""
+        """Draw the live pressure graph on the canvas — raw and processed lines."""
         self.canvas.delete("all")
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
@@ -480,48 +582,82 @@ class BrakeCalibrator(tk.Tk):
             y = int(h * i / 4)
             self.canvas.create_line(0, y, w, y, fill="#333333", dash=(2, 4))
 
-        # Draw pressure history
-        if len(self.pressure_history) < 2:
-            return
+        # Draw legend
+        legend_y = 12
+        self.canvas.create_line(8, legend_y, 28, legend_y, fill="#4488ff", width=2)
+        self.canvas.create_text(
+            32,
+            legend_y,
+            text="Raw ADC",
+            fill="#4488ff",
+            anchor=tk.W,
+            font=("Consolas", 9),
+        )
+        self.canvas.create_line(120, legend_y, 140, legend_y, fill="#44ff44", width=2)
+        self.canvas.create_text(
+            144,
+            legend_y,
+            text="Preview",
+            fill="#44ff44",
+            anchor=tk.W,
+            font=("Consolas", 9),
+        )
+        self.canvas.create_line(230, legend_y, 250, legend_y, fill="#ff4444", width=2)
+        self.canvas.create_text(
+            254,
+            legend_y,
+            text="Game Input",
+            fill="#ff4444",
+            anchor=tk.W,
+            font=("Consolas", 9),
+        )
 
-        points = []
-        n = len(self.pressure_history)
-        for i, val in enumerate(self.pressure_history):
-            x = int(w * i / max(n - 1, 1))
-            y = int(h * (1.0 - val))  # Invert: 0 at bottom, 1 at top
-            points.append((x, y))
+        # Draw a history line
+        def draw_line(history, color, width=2):
+            if len(history) < 2:
+                return
+            n = len(history)
+            coords = []
+            for i, val in enumerate(history):
+                x = int(w * i / max(n - 1, 1))
+                y = int(h * (1.0 - max(0.0, min(1.0, val))))
+                coords.extend([x, y])
+            self.canvas.create_line(*coords, fill=color, width=width, smooth=True)
 
-        # Draw as connected line
-        for i in range(len(points) - 1):
-            # Color gradient: green at low pressure, red at high
-            val = self.pressure_history[i]
-            r = int(val * 255)
-            g = int((1.0 - val) * 255)
-            color = f"#{r:02x}{g:02x}00"
-            self.canvas.create_line(
-                points[i][0],
-                points[i][1],
-                points[i + 1][0],
-                points[i + 1][1],
-                fill=color,
-                width=2,
-            )
+        # Raw ADC line (blue)
+        draw_line(self.raw_history, "#4488ff", 2)
+        # Preview line (green) — local processing with slider settings
+        draw_line(self.preview_history, "#44ff44", 2)
+        # Processed brake line (red) — actual Pico output, drawn on top
+        draw_line(self.brake_history, "#ff4444", 2)
 
     def _poll_loop(self):
         """Main polling loop — runs at ~30Hz."""
-        # Read processed brake value for the graph
-        brake_val = self.reader.read_brake()
-        # Read raw ADC value for calibration display
-        raw_val = self.reader.read_raw_adc_int()
+        # Read both axes
+        brake_val = self.reader.read_brake()  # Processed (calibrated, curved, smoothed)
+        raw_val = self.reader.read_raw_adc()  # Raw ADC (0-1 normalized)
+        raw_val_int = self.reader.read_raw_adc_int()
+
+        # Update both histories
+        if raw_val is not None:
+            self.raw_history.append(raw_val)
+            if len(self.raw_history) > self.HISTORY_LENGTH:
+                self.raw_history.pop(0)
+
+            # Compute preview with current slider settings
+            preview = self._compute_preview(raw_val)
+            self.preview_history.append(preview)
+            if len(self.preview_history) > self.HISTORY_LENGTH:
+                self.preview_history.pop(0)
 
         if brake_val is not None:
-            # Update pressure history (uses processed brake for visual)
-            self.pressure_history.append(brake_val)
-            if len(self.pressure_history) > self.HISTORY_LENGTH:
-                self.pressure_history.pop(0)
+            self.brake_history.append(brake_val)
+            if len(self.brake_history) > self.HISTORY_LENGTH:
+                self.brake_history.pop(0)
 
-        if raw_val is not None:
-            self.raw_label.config(text=f"Raw ADC: {raw_val}")
+        # Update labels
+        if raw_val_int is not None:
+            self.raw_label.config(text=f"Raw ADC: {raw_val_int}")
         else:
             self.raw_label.config(text="Raw ADC: --")
 
@@ -529,8 +665,6 @@ class BrakeCalibrator(tk.Tk):
             self.norm_label.config(text=f"Brake: {brake_val:.1%}")
         else:
             self.norm_label.config(text="Brake: --")
-
-        self.device_label.config(text=f"Device: {self.reader.device_name}")
 
         # Process auto-calibration
         self._process_auto_cal()
