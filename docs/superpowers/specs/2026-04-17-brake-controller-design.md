@@ -15,7 +15,7 @@ A single-brake-axis pneumatic brake controller. An SDA32x50 hydraulic cylinder i
 | SDA32x50 cylinder | G1/8 ports | $15.89 |
 | XDB401 pressure sensor | 0–1 MPa, 0.5–4.5V output | $23.39 |
 | RPi Pico | RP2040 | owned |
-| 10KΩ + 15KΩ resistors | Voltage divider | owned |
+| 2KΩ + 3.3KΩ resistors | Voltage divider | owned |
 | G1/8 BSP tee | Plumbing | $5.89 |
 | 1/8 BSPT Schrader valve | Air fill | $9.99 |
 | 1/8 NPT Schrader valve | ( cheaper alternative ) | $3.73 |
@@ -40,14 +40,14 @@ A single-brake-axis pneumatic brake controller. An SDA32x50 hydraulic cylinder i
 |---|---|
 | Sensor VCC | Pico VSYS (5V) |
 | Sensor GND | Pico GND |
-| Sensor Signal | → R1 (10KΩ) → junction |
-| Junction | → Pico GP26 (ADC) AND → R2 (15KΩ) → GND |
+| Sensor Signal | → R1 (2KΩ) → junction |
+| Junction | → Pico GP26 (ADC) AND → R2 (3.3KΩ) → GND |
 
 **Voltage divider math:**
-- Divider ratio: R2/(R1+R2) = 15K/25K = 0.6
-- Sensor 0.5V → 0.3V at GP26
-- Sensor 4.5V → 2.7V at GP26
-- Pico ADC range: 0–3.3V — 2.7V is 82% of full scale (safe)
+- Divider ratio: R2/(R1+R2) = 3.3K/5.3K ≈ 0.623
+- Sensor 0.5V → 0.311V at GP26
+- Sensor 4.5V → 2.802V at GP26
+- Pico ADC range: 0–3.3V — 2.802V is 85% of full scale (safe)
 
 **ADC resolution:** Pico has 12-bit ADC (0–4095), CircuitPython maps to 0–65535. In the 0.3V–2.7V active window this gives ~2,978 distinct values — adequate for sim racing. Oversampling (see firmware) provides noise reduction and nominal resolution improvement.
 

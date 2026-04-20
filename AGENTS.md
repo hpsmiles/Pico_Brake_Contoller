@@ -25,9 +25,9 @@ Sim racing pneumatic brake + throttle controller for Sim Sonn Pro pedal. RPi Pic
 - No adafruit_hid library — custom descriptor + raw report bytes
 - HID report: 8 bytes (4 × uint16 LE axes). X=processed brake, Y=raw ADC for calibration GUI, Z=processed throttle, Rz=raw throttle ADC.
 - Pico ADC is 12-bit, CircuitPython maps to 0-65535. Oversampling default 16x for noise reduction.
-- Brake wiring: VCC→VSYS(5V), Signal→R1(10K)→GP26, R2(15K)→GND
+- Brake wiring: VCC→VSYS(5V), Signal→R1(2K)→GP26, R2(3.3K)→GND
 - Throttle has two sensor options (one active at a time, set in calibration.json `throttle_sensor`):
-  - **SS49E Hall Effect**: VCC→VSYS(5V), Vout→R3(10K)→GP27(ADC1), R4(15K)→GND (same voltage divider as brake)
+  - **SS49E Hall Effect**: VCC→VSYS(5V), Vout→R3(2K)→GP27(ADC1), R4(3.3K)→GND (same voltage divider as brake)
   - **HX711 load cell**: HX711 VIN→VSYS(5V), GND→GND, SCK→GP28, DATA→GP16 (uses `adafruit_hx711` library)
 - SS49E reads via analogio on GP27 (same code path as brake), HX711 reads via pseudo-SPI on GP16+GP28 (different code path)
 - Both can be wired simultaneously — firmware auto-detects HX711 on boot (probes GP16 for data-ready signal), falls back to SS49E on GP27

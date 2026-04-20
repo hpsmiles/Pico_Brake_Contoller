@@ -9,7 +9,7 @@ Pneumatic brake + throttle controller for the Sim Sonn Pro pedal. Uses a Raspber
 ### Hardware Setup
 
 1. Assemble plumbing: cylinder → tee → sensor + Schrader valve (see [wiring diagram](docs/wiring-diagram.md))
-2. Wire brake sensor to Pico: VCC → VSYS, GND → GND, Signal → 10KΩ → GP26, 15KΩ → GND
+2. Wire brake sensor to Pico: VCC → VSYS, GND → GND, Signal → 2KΩ → GP26, 3.3KΩ → GND
 3. (Optional) Wire throttle sensor — SS49E Hall Effect on GP27 or HX711 load cell on GP16+GP28
 4. Mount cylinder to Sim Sonn Pro pedal using M10 hardware + preload spring
 5. Pump air via Schrader valve to preload
@@ -32,7 +32,7 @@ Pneumatic brake + throttle controller for the Sim Sonn Pro pedal. Uses a Raspber
 
 ### Testing Without a Sensor
 
-- Jumper GP26 to GND for 0%, or to 3.3V for ~82% (due to voltage divider scaling)
+- Jumper GP26 to GND for 0%, or to 3.3V for ~85% (due to voltage divider scaling)
 - Touch GP26 with a finger for visible noise on the graph
 
 ### In-Game Configuration
@@ -48,6 +48,19 @@ Pneumatic brake + throttle controller for the Sim Sonn Pro pedal. Uses a Raspber
 | Green | Preview | Current slider settings applied locally (real-time) |
 | Red | Game Input | Actual Pico output (X-axis, after save + reboot) |
 | Orange | Throttle | Processed throttle output (Z-axis, when enabled) |
+
+## Throttle
+
+Two sensor options — only one is active at a time, but both can be wired simultaneously. The firmware auto-detects which is connected on boot.
+
+| Sensor | Wiring | How it works |
+|--------|--------|--------------|
+| **SS49E Hall Effect** | VCC → VSYS, GND → GND, Vout → 2KΩ → GP27, 3.3KΩ → GND | Analog voltage via ADC, same code path as brake |
+| **HX711 Load Cell** | VIN → VSYS, GND → GND, SCK → GP28, DATA → GP16 | 24-bit ADC via pseudo-SPI (requires `adafruit_hx711` library) |
+
+- **Auto-detection:** On boot, firmware probes GP16 for an HX711 data-ready signal. If found → load cell. Otherwise → SS49E on GP27.
+- Override with `"throttle_sensor": "hall"` or `"load_cell"` in `calibration.json` (default: `"auto"`).
+- Throttle axis appears as the gamepad Z-axis in-game. Raw throttle ADC is sent on Rz for the calibration GUI.
 
 ## Brake Curves
 

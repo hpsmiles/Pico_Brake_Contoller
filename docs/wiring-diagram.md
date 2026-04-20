@@ -9,8 +9,8 @@
 | SDA32x50 cylinder | G1/8 ports | $15.89 |
 | XDB401 pressure sensor | 0–1 MPa, 0.5–4.5V | $23.39 |
 | RPi Pico | RP2040 | owned |
-| 10KΩ resistor | R1 (voltage divider, brake) | owned |
-| 15KΩ resistor | R2 (voltage divider, brake) | owned |
+| 2KΩ resistor | R1 (voltage divider, brake) | owned |
+| 3.3KΩ resistor | R2 (voltage divider, brake) | owned |
 | G1/8 BSP tee | Plumbing | $5.89 |
 | 1/8 BSPT or NPT Schrader valve | Air fill | ~$4-10 |
 | M10x60mm bolt | Mounting | $4.00 |
@@ -26,8 +26,8 @@
 | Part | Spec | Ref |
 |------|------|-----|
 | SS49E Hall Effect sensor | 3.0–6.5V, 0.86–4.21V out | ~$2-5 |
-| 10KΩ resistor | R3 (voltage divider, throttle) | owned |
-| 15KΩ resistor | R4 (voltage divider, throttle) | owned |
+| 2KΩ resistor | R3 (voltage divider, throttle) | owned |
+| 3.3KΩ resistor | R4 (voltage divider, throttle) | owned |
 
 ### Throttle — Option B: HX711 Load Cell
 
@@ -61,13 +61,13 @@ XDB401 Sensor          RPi Pico
 │ GND  ────┼──────────┤ GND      │
 │ Signal ──┼──┤       │          │
 └──────────┘  │       │          │
-              R1      │          │
-              10KΩ    │          │
-              │       │          │
-              ├───────┤ GP26 (ADC0)│
-              │       │          │
-              R2      │          │
-              15KΩ    │          │
+               R1      │          │
+               2KΩ     │          │
+               │       │          │
+               ├───────┤ GP26 (ADC0)│
+               │       │          │
+               R2      │          │
+               3.3KΩ   │          │
               │       │          │
               ├───────┤ GND      │
               │       └──────────┘
@@ -76,11 +76,11 @@ XDB401 Sensor          RPi Pico
 
 ## Voltage Divider Math (Brake)
 
-- Ratio: R2 / (R1 + R2) = 15K / 25K = 0.6
-- Sensor 0.5V output → 0.3V at GP26
-- Sensor 4.5V output → 2.7V at GP26
+- Ratio: R2 / (R1 + R2) = 3.3K / 5.3K ≈ 0.623
+- Sensor 0.5V output → 0.311V at GP26
+- Sensor 4.5V output → 2.802V at GP26
 - Pico ADC reference: 3.3V
-- 2.7V = 82% of full scale (safe, within range)
+- 2.802V = 85% of full scale (safe, within range)
 
 ---
 
@@ -98,13 +98,13 @@ SS49E Sensor            RPi Pico
 │ GND  ────┼──────────┤ GND      │
 │ Vout ────┼──┤       │          │
 └──────────┘  │       │          │
-              R3      │          │
-              10KΩ    │          │
-              │       │          │
-              ├───────┤ GP27 (ADC1)│
-              │       │          │
-              R4      │          │
-              15KΩ    │          │
+               R3      │          │
+               2KΩ     │          │
+               │       │          │
+               ├───────┤ GP27 (ADC1)│
+               │       │          │
+               R4      │          │
+               3.3KΩ   │          │
               │       │          │
               ├───────┤ GND      │
               │       └──────────┘
@@ -113,11 +113,11 @@ SS49E Sensor            RPi Pico
 
 ### Voltage Divider Math (Throttle — SS49E)
 
-- Same ratio as brake: R4 / (R3 + R4) = 15K / 25K = 0.6
-- SS49E min output ~0.86V → 0.52V at GP27
-- SS49E quiescent ~2.5V → 1.5V at GP27 (no pedal = half range)
-- SS49E max output ~4.21V → 2.53V at GP27
-- 2.53V = 77% of 3.3V full scale (safe)
+- Same ratio as brake: R4 / (R3 + R4) = 3.3K / 5.3K ≈ 0.623
+- SS49E min output ~0.86V → 0.536V at GP27
+- SS49E quiescent ~2.5V → 1.557V at GP27 (no pedal = half range)
+- SS49E max output ~4.21V → 2.624V at GP27
+- 2.624V = 80% of 3.3V full scale (safe)
 - Note: SS49E can also run at 3.3V directly on Pico 3V3(OUT) — output
   range would be ~0.6V–2.6V, no divider needed, but full-scale range
   is smaller. VSYS+divider gives better resolution.

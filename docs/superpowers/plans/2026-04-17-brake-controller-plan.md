@@ -62,7 +62,7 @@ Sim racing pneumatic brake controller for Sim Sonn Pro pedal. RPi Pico (RP2040) 
 - No adafruit_hid library — custom descriptor + raw report bytes
 - HID report: 8 bytes (4 × uint16 LE axes). X=processed brake, Y=raw ADC for calibration GUI, Z/Rz=0.
 - Pico ADC is 12-bit, CircuitPython maps to 0-65535. Oversampling default 16x for noise reduction.
-- Sensor wiring: VCC→VSYS(5V), Signal→R1(10K)→GP26, R2(15K)→GND
+- Sensor wiring: VCC→VSYS(5V), Signal→R1(2K)→GP26, R2(3.3K)→GND
 
 ## Setup (fresh Pico)
 
@@ -172,9 +172,9 @@ for the calibration GUI to read.
 Hardware:
   Sensor VCC  → Pico VSYS (5V)
   Sensor GND  → Pico GND
-  Sensor Signal → R1 (10KΩ) → GP26 (ADC0)
-                                   ↓
-                               R2 (15KΩ) → GND
+   Sensor Signal → R1 (2KΩ) → GP26 (ADC0)
+                                    ↓
+                                R2 (3.3KΩ) → GND
 """
 
 import analogio
@@ -908,8 +908,8 @@ git commit -m "feat: add Tkinter calibration GUI with auto-calibrate and live pr
 | SDA32x50 cylinder | G1/8 ports | $15.89 |
 | XDB401 pressure sensor | 0–1 MPa, 0.5–4.5V | $23.39 |
 | RPi Pico | RP2040 | owned |
-| 10KΩ resistor | R1 (voltage divider) | owned |
-| 15KΩ resistor | R2 (voltage divider) | owned |
+| 2KΩ resistor | R1 (voltage divider) | owned |
+| 3.3KΩ resistor | R2 (voltage divider) | owned |
 | G1/8 BSP tee | Plumbing | $5.89 |
 | 1/8 BSPT or NPT Schrader valve | Air fill | ~$4-10 |
 | M10x60mm bolt | Mounting | $4.00 |
@@ -944,13 +944,13 @@ XDB401 Sensor          RPi Pico
 │ GND  ────┼──────────┤ GND      │
 │ Signal ──┼──┤       │          │
 └──────────┘  │       │          │
-              R1      │          │
-              10KΩ    │          │
-              │       │          │
-              ├───────┤ GP26 (ADC0)│
-              │       │          │
-              R2      │          │
-              15KΩ    │          │
+               R1      │          │
+               2KΩ     │          │
+               │       │          │
+               ├───────┤ GP26 (ADC0)│
+               │       │          │
+               R2      │          │
+               3.3KΩ   │          │
               │       │          │
               ├───────┤ GND      │
               │       └──────────┘
@@ -959,7 +959,7 @@ XDB401 Sensor          RPi Pico
 
 ## Voltage Divider Math
 
-- Ratio: R2 / (R1 + R2) = 15K / 25K = 0.6
+- Ratio: R2 / (R1 + R2) = 3.3K / 5.3K ≈ 0.623
 - Sensor 0.5V output → 0.3V at GP26
 - Sensor 4.5V output → 2.7V at GP26
 - Pico ADC reference: 3.3V
@@ -1001,7 +1001,7 @@ Pneumatic brake mod for the Sim Sonn Pro brake pedal. Uses a Raspberry Pi Pico w
 ### Hardware Setup
 
 1. Assemble plumbing: cylinder → tee → sensor + Schrader valve (see [wiring diagram](docs/wiring-diagram.md))
-2. Wire sensor to Pico: VCC → VSYS, GND → GND, Signal → 10KΩ → GP26, 15KΩ → GND
+2. Wire sensor to Pico: VCC → VSYS, GND → GND, Signal → 2KΩ → GP26, 3.3KΩ → GND
 3. Mount cylinder to Sim Sonn Pro pedal using M10 hardware + preload spring
 4. Pump air via Schrader valve to preload
 

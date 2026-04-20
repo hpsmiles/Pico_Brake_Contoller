@@ -15,16 +15,16 @@ Hardware:
   Brake (XDB401):
     Sensor VCC    → Pico VSYS (5V)
     Sensor GND    → Pico GND
-    Sensor Signal → R1 (10KΩ) → GP26 (ADC0)
+    Sensor Signal → R1 (2KΩ) → GP26 (ADC0)
                                   ↓
-                              R2 (15KΩ) → GND
+                              R2 (3.3KΩ) → GND
 
   Throttle Option A — SS49E Hall Effect:
     Sensor VCC  → Pico VSYS (5V)
     Sensor GND  → Pico GND
-    Sensor Vout → R3 (10KΩ) → GP27 (ADC1)
+    Sensor Vout → R3 (2KΩ) → GP27 (ADC1)
                                   ↓
-                              R4 (15KΩ) → GND
+                              R4 (3.3KΩ) → GND
 
   Throttle Option B — HX711 load cell:
     HX711 VIN  → Pico VSYS (5V)
