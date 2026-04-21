@@ -2,22 +2,43 @@
 
 ## Project
 
-Sim racing pneumatic brake + throttle controller for Sim Sonn Pro pedal. RPi Pico (RP2040) + XDB401 pressure sensor (brake) + SS49E Hall Effect or HX711 load cell (throttle), CircuitPython firmware, Tkinter calibration GUI.
+Sim racing pneumatic brake + throttle controller for Sim Sonn Pro pedal. RPi Pico (RP2040) + XDB401 pressure sensor (brake) + SS49E Hall Effect or HX711 load cell (throttle). Dual firmware: CircuitPython (prototyping) and C++/Arduino-Pico (production, deterministic 1kHz HID, dual-core). Tkinter calibration GUI with auto-reset via hidapi.
 
-**Current release:** v0.1 (pre-release)
+**Current release:** v0.2
 
 ## Commands
 
 - Run calibration GUI: `python gui/calibrator.py`
-- Build GUI exe: `.venv\Scripts\pyinstaller --onefile --windowed --name BrakeCalibrator --distpath dist gui/calibrator.py`
+- Build GUI exe: `pyinstaller --onefile --windowed --name BrakeCalibrator --distpath dist gui/calibrator.py`
+- Build C++ firmware: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_65536" --build-path firmware_cpp/build firmware_cpp`
 - No test suite yet
 
 ## Architecture
 
 - `firmware/boot.py` — Custom 16-bit USB HID gamepad descriptor (runs before code.py)
-- `firmware/code.py` — Main Pico firmware: ADC read → oversample → clamp (with saturation) → normalize → deadzone → bite point → curve → EMA → HID send (X=brake, Y=raw ADC for GUI, Z=processed throttle, Rz=raw throttle)
-- `gui/calibrator.py` — PC-side Tkinter calibration tool (pygame-ce for HID input, writes calibration.json to CIRCUITPY)
+- `firmware/code.py` — Main Pico firmware (CircuitPython): ADC read → oversample → clamp (with saturation) → normalize → deadzone → bite point → curve → EMA → HID send (X=brake, Y=raw ADC for GUI, Z=processed throttle, Rz=raw throttle)
+- `firmware_cpp/` — C++ firmware port (Arduino-Pico): same signal pipeline, deterministic 1000Hz HID, dual-core
+- `gui/calibrator.py` — PC-side Tkinter calibration tool (pygame-ce for HID input, writes calibration.json to Pico drive)
 - `calibration.json` — Device-specific, NOT in repo, lives on Pico only
+
+## C++ Firmware (Arduino-Pico)
+
+- `firmware_cpp/firmware_cpp.ino` — Entry point: dual-core main loop (Core 0: USB + HID send, Core 1: ADC + processing)
+- `firmware_cpp/config.h` — Pin defs, Calibration/ChannelCal structs, HID descriptor (4×uint16, no Output Report)
+- `firmware_cpp/adc_reader.h/.cpp` — ADC init + oversampled read (12→16 bit scaling matching CircuitPython)
+- `firmware_cpp/hx711_driver.h/.cpp` — HX711 bit-bang driver with probe/read/16-bit mapping
+- `firmware_cpp/signal_processing.h/.cpp` — Clamp, normalize, deadzone, bite, curve (linear/progressive/aggressive/custom), EMA, invert
+- `firmware_cpp/calibration.h/.cpp` — JSON config loading via ArduinoJson v7 + LittleFS
+- `firmware_cpp/msc_disk.h/.cpp` — LittleFS + SingleFileDrive (HID gamepad + MSC drive on same USB)
+
+Build: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_65536" --build-path firmware_cpp/build firmware_cpp`
+Flash: Copy `firmware_cpp/build/firmware_cpp.ino.uf2` to Pico via BOOTSEL
+Same calibration.json format as CircuitPython firmware, same GUI, same wiring.
+**NOTE:** HID Output Report NOT supported with arduino-pico USB stack (causes CM_PROB_FAILED_START).
+GUI falls back to manual RESET message for C++ firmware. CircuitPython firmware supports auto-reset via hidapi.
+**NOTE:** `--board-options "flash=2097152_65536"` is REQUIRED — default FQBN has no filesystem partition.
+LED status: 1 blink=Hall, 2 blinks=HX711, 3 blinks=defaults, 10 rapid=fatal
+RGB LED (GP23): Green=calibration loaded, Red=defaults/no calibration, Orange=booting
 
 ## Key constraints
 

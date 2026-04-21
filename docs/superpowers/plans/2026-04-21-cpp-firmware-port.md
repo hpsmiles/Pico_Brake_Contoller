@@ -196,6 +196,10 @@ static const uint8_t GAMEPAD_HID_DESCRIPTOR[] = {
     0x95, 0x04,        //     Report Count (4 axes)
     0x81, 0x02,        //     Input (Data, Variable, Absolute)
     0xC0,              //   End Collection (Physical)
+    // Output Report: 8 bytes for host→device commands (e.g., 0xDEAD = reset)
+    0x75, 0x08,        //     Report Size (8 bits)
+    0x95, 0x08,        //     Report Count (8 bytes)
+    0x91, 0x02,        //     Output (Data, Variable, Absolute)
     0xC0               // End Collection (Application)
 };
 static const size_t GAMEPAD_HID_DESCRIPTOR_LEN = sizeof(GAMEPAD_HID_DESCRIPTOR);
@@ -1166,28 +1170,25 @@ git commit -m "feat(cpp): dual-core main loop with ADC processing on Core 1, HID
 
 ---
 
-### Task 8: GUI Compatibility Verification + Drive Path Update
+### Task 8: USB MSC Drive Label + HID Reset Command
 
 **Files:**
-- Modify: `gui/calibrator.py` (drive detection only — add `firmware_cpp` mode awareness)
+- Modify: `firmware_cpp/msc_disk.cpp`
+- Modify: `firmware_cpp/firmware_cpp.ino`
 
-The calibration GUI searches for a "CIRCUITPY" drive by volume label. The Arduino-Pico FatFSUSB drive will have a different default label. We need to ensure the GUI can find the Pico's drive regardless of whether CircuitPython or C++ firmware is running. The simplest approach: format the FatFS drive with label "CIRCUITPY" to maintain backward compatibility.
+The calibration GUI searches for drives labeled "PIcoBrake" (C++ firmware) or "CIRCUITPY" (CircuitPython). We format the FatFS drive with label "PIcoBrake" on first boot. Also implement the HID Output Report reset command: when the GUI sends 0xDE 0xAD as an Output Report, the Pico reboots via `rp2040.reboot()` — this enables "save + auto-reset" from the GUI without pressing the physical RESET button.
 
-- [ ] **Step 1: Verify how calibrator.py finds the Pico drive**
+- [ ] **Step 1: Format the FatFS drive with label "PIcoBrake" on first boot**
 
-Read `gui/calibrator.py` lines 1-100 to find the drive detection code. The key function searches Windows drives for one labeled "CIRCUITPY".
-
-- [ ] **Step 2: Create a startup routine that formats the FatFS drive with label "CIRCUITPY" on first boot**
-
-Add to `msc_disk.cpp`, before `FatFS.begin()`:
+In `msc_disk.cpp`, update `msc_disk_init()`:
 
 ```cpp
 void msc_disk_init() {
-    // On first boot, format the flash filesystem with label "CIRCUITPY"
-    // so the existing GUI can find it
+    // On first boot, format the flash filesystem with label "PIcoBrake"
+    // so the calibration GUI can find it
     if (!FatFS.begin()) {
         // Filesystem not found — format it
-        FatFS.format("CIRCUITPY");
+        FatFS.format("PIcoBrake");
         FatFS.begin();
     }
 
@@ -1198,21 +1199,40 @@ void msc_disk_init() {
 }
 ```
 
-Note: `FatFS.format()` may or may not be available as a single call. If the API differs, check the Arduino-Pico FatFS docs and adjust. The intent is: on first boot when no filesystem exists, create one with label "CIRCUITPY".
+- [ ] **Step 2: Add HID Output Report callback for reset command**
 
-- [ ] **Step 3: Build, flash, and verify GUI can find the drive**
+In `firmware_cpp.ino`, add a HID output report callback that triggers reboot on 0xDEAD:
+
+```cpp
+// TinyUSB HID Output Report callback — called when host sends data to device
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                            hid_report_type_t report_type,
+                            uint8_t const* buffer, uint16_t bufsize) {
+    (void)instance; (void)report_id; (void)report_type;
+    // Check for reset command: 0xDE 0xAD
+    if (bufsize >= 2 && buffer[0] == 0xDE && buffer[1] == 0xAD) {
+        digitalWrite(PIN_LED, LOW);
+        rp2040.reboot();
+    }
+}
+```
+
+Note: With `USB.registerHIDDevice()`, TinyUSB callbacks may need to be registered differently. If the callback approach doesn't work directly, an alternative is to poll for received reports in `loop()` using TinyUSB's `tud_hid_available()` / `tud_hid_read()` API. Adjust based on what compiles.
+
+- [ ] **Step 3: Build, flash, and verify**
 
 1. Flash the C++ firmware
-2. The Pico should appear as a drive labeled "CIRCUITPY" in Windows Explorer
+2. The Pico should appear as a drive labeled "PIcoBrake" in Windows Explorer
 3. Run `python gui/calibrator.py`
 4. Verify the GUI auto-detects the Pico's drive and can write calibration.json
-5. Press RESET on Pico → verify new calibration values are applied
+5. Click Save → Pico should auto-reset (requires `pip install hidapi`)
+6. After reset, verify new calibration values are applied
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add firmware_cpp/msc_disk.cpp
-git commit -m "feat(cpp): format FatFS as CIRCUITPY label for GUI compatibility"
+git add firmware_cpp/msc_disk.cpp firmware_cpp/firmware_cpp.ino
+git commit -m "feat(cpp): PIcoBrake drive label + HID reset command (0xDEAD = reboot)"
 ```
 
 ---
@@ -1328,7 +1348,8 @@ git commit -m "docs: add C++ firmware section to AGENTS.md"
 | USB MSC composite device (CIRCUITPY drive) | Task 6 |
 | Dual-core (Core 0: USB, Core 1: ADC+processing) | Task 7 |
 | LED blink status codes | Task 9 |
-| GUI compatibility (same drive label, same JSON format) | Task 8 |
+| GUI compatibility (PIcoBrake drive label, same JSON format) | Task 8 |
+| HID auto-reset command (0xDEAD = reboot) | Task 8 |
 
 ### 2. Placeholder Scan
 
