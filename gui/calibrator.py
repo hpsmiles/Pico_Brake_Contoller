@@ -1621,7 +1621,7 @@ class BrakeCalibrator(tk.Tk):
             anchor=tk.W,
             font=("Consolas", 9),
         )
-        legend_x += 120
+        legend_x += 145
         
         self.canvas.create_line(legend_x, legend_y, legend_x + 20, legend_y, fill="#ff4444", width=2)
         self.canvas.create_text(
