@@ -62,7 +62,7 @@ RGB LED (GP23): Green=calibration loaded, Red=defaults/no calibration, Orange=bo
 
 ## GUI features
 
-- **3-line live graph:** Blue = Raw ADC, Green = Preview (slider settings applied locally), Red = Game Input (actual Pico output), Orange = Throttle (when enabled)
+- **3-line live graph:** Blue = Raw Input, Green = Calibrated Input (settings applied locally), Red = Game Input (actual Pico output), Orange = Throttle (when enabled)
 - **Device selector:** Dropdown lists all connected gamepads, auto-selects device with "pico" in name
 - **Auto-calibration:** Single-window flow — 3s countdown → 5s capture (tracks min and max)
 - **Preview line:** Applies current curve/smoothing/deadzone/min/max/saturation/bite-point settings locally in real time, no save+reboot needed

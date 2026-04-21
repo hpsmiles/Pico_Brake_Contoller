@@ -374,7 +374,7 @@ class BrakeCalibrator(tk.Tk):
         info_frame = ttk.Frame(self.left_frame)
         info_frame.pack(fill=tk.X, pady=(5, 0))
 
-        self.raw_label = ttk.Label(info_frame, text="Raw ADC: --")
+        self.raw_label = ttk.Label(info_frame, text="Raw Input: --")
         self.raw_label.pack(side=tk.LEFT, padx=5)
 
         self.norm_label = ttk.Label(info_frame, text="Brake: --")
@@ -1605,7 +1605,7 @@ class BrakeCalibrator(tk.Tk):
         self.canvas.create_text(
             legend_x + 24,
             legend_y,
-            text="Raw ADC",
+            text="Raw Input",
             fill="#4488ff",
             anchor=tk.W,
             font=("Consolas", 9),
@@ -1616,12 +1616,12 @@ class BrakeCalibrator(tk.Tk):
         self.canvas.create_text(
             legend_x + 24,
             legend_y,
-            text="Preview",
+            text="Calibrated Input",
             fill="#44ff44",
             anchor=tk.W,
             font=("Consolas", 9),
         )
-        legend_x += 85
+        legend_x += 120
         
         self.canvas.create_line(legend_x, legend_y, legend_x + 20, legend_y, fill="#ff4444", width=2)
         self.canvas.create_text(
@@ -1657,9 +1657,9 @@ class BrakeCalibrator(tk.Tk):
                 coords.extend([x, y])
             self.canvas.create_line(*coords, fill=color, width=width, smooth=True)
 
-        # Raw ADC line (blue)
+        # Raw Input line (blue)
         draw_line(self.raw_history, "#4488ff", 2)
-        # Preview line (green) — local processing with slider settings
+        # Calibrated Input line (green) — local processing with slider settings
         draw_line(self.preview_history, "#44ff44", 2)
         # Processed brake line (red) — actual Pico output, drawn on top
         draw_line(self.brake_history, "#ff4444", 2)
@@ -1719,9 +1719,9 @@ class BrakeCalibrator(tk.Tk):
 
         # Update brake labels
         if raw_val_int is not None:
-            self.raw_label.config(text=f"Raw ADC: {raw_val_int}")
+            self.raw_label.config(text=f"Raw Input: {raw_val_int}")
         else:
-            self.raw_label.config(text="Raw ADC: --")
+            self.raw_label.config(text="Raw Input: --")
 
         if brake_val is not None:
             self.norm_label.config(text=f"Brake: {brake_val:.1%}")

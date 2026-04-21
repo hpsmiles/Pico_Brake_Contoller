@@ -58,8 +58,8 @@ Pneumatic brake + throttle controller for the Sim Sonn Pro pedal. Uses a Raspber
 
 | Color | Line | Source |
 |-------|------|--------|
-| Blue | Raw ADC | Unprocessed brake sensor reading from Y-axis |
-| Green | Preview | Current slider settings applied locally (real-time) |
+| Blue | Raw Input | Unprocessed brake sensor reading from Y-axis |
+| Green | Calibrated Input | Current slider settings applied locally (real-time) |
 | Red | Game Input | Actual Pico output (X-axis, after save + reboot) |
 | Orange | Throttle | Processed throttle output (Z-axis, when enabled) |
 
