@@ -37,12 +37,25 @@ Pneumatic brake + throttle controller for the Sim Sonn Pro pedal. Uses a Raspber
 
 ### Calibration
 
+**Python GUI** (original Tkinter-based):
+
 1. Install GUI dependencies: `pip install -r gui/requirements.txt`
 2. Run: `python gui/calibrator.py`
-3. Select your Pico from the device dropdown (auto-detected if name contains "pico")
-4. Use Auto Calibrate or manually set min/max
-5. Tune curve, smoothing, deadzone, saturation, bite point — the green **Preview** line shows the effect instantly
-6. Click "Save to Pico" — CircuitPython firmware auto-resets (requires hidapi), C++ firmware requires pressing RESET on Pico
+
+**C# GUI** (new WPF-based, dark theme, modern charts):
+
+1. Requires [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+2. Run the published exe from `gui_cs/bin/Release/BrakeCalibrator.exe`, or build from source:
+   ```
+   dotnet run --project gui_cs
+   ```
+
+**Shared calibration flow** (both GUIs):
+
+1. Select your Pico from the device dropdown (auto-detected if name contains "pico")
+2. Use Auto Calibrate or manually set min/max
+3. Tune curve, smoothing, deadzone, saturation, bite point — the green **Preview** line shows the effect instantly
+4. Click "Save to Pico" — CircuitPython firmware auto-resets (requires hidapi), C++ firmware requires pressing RESET on Pico
 
 ### Testing Without a Sensor
 
@@ -107,12 +120,26 @@ Save and load named calibration profiles stored on the Pico drive under `profile
 
 ## Building the GUI Executable
 
+**Python GUI:**
+
 ```bash
 pip install pygame-ce hidapi pyinstaller
 pyinstaller --onefile --windowed --name BrakeCalibrator --distpath dist gui/calibrator.py
 ```
 
 Output: `dist/BrakeCalibrator.exe` (~20-150MB depending on Python environment)
+
+**C# GUI:**
+
+```bash
+# Framework-dependent (requires .NET 8 Desktop Runtime on target, ~19MB exe)
+dotnet publish gui_cs -c Release -r win-x64
+
+# Self-contained (no runtime needed, ~173MB exe)
+dotnet publish gui_cs -c Release -r win-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+Output: `gui_cs/bin/Release/net8.0-windows/win-x64/publish/BrakeCalibrator.exe`
 
 ## C++ Firmware Architecture
 
@@ -139,6 +166,28 @@ The C++ firmware (`firmware_cpp/`) uses Arduino-Pico with dual-core:
 - LittleFS + SingleFileDrive replaces CIRCUITPY — the Pico appears as both a gamepad and a small USB drive
 - No auto-reset via hidapi (arduino-pico USB stack doesn't support HID Output Reports)
 - Build requires `--board-options "flash=2097152_65536"` for filesystem partition
+
+## C# GUI Architecture
+
+The C# GUI (`gui_cs/`) is a WPF application with LiveCharts2 charts, dark theme, and MVVM architecture:
+
+| File | Purpose |
+|------|---------|
+| `Models/CalibrationData.cs` | ChannelCal, CalibrationData models, curve presets |
+| `Services/HidReader.cs` | SharpDX DirectInput joystick reader (~30Hz poll) |
+| `Services/SignalProcessing.cs` | Local preview pipeline (mirrors firmware math exactly) |
+| `Services/HidReset.cs` | hidapi Output Report for auto-reset (CircuitPython only) |
+| `Services/CircuitPyDrive.cs` | Cross-platform CIRCUITPY/PIcoBrake drive detection |
+| `Services/CalibrationFileService.cs` | JSON load/save + profile CRUD |
+| `ViewModels/MainViewModel.cs` | MVVM ViewModel with CommunityToolkit.Mvvm |
+| `Views/CurveEditorWindow.xaml/.cs` | Interactive drag-to-edit curve editor |
+| `Resources/DarkTheme.xaml` | GitHub-dark inspired theme with custom controls |
+
+**Key differences from Python GUI:**
+- Dark themed with LiveCharts2 (SkiaSharp) for smooth animated charts
+- MVVM architecture (CommunityToolkit.Mvvm) instead of Tkinter procedural
+- Same calibration.json format — both GUIs are interchangeable
+- Interactive curve editor with draggable control points directly on the chart
 
 ## Cost
 

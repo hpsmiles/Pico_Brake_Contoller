@@ -7,3 +7,10 @@ dist/
 *.spec
 firmware_cpp/build/
 firmware_cpp/build_test/
+
+# C# / .NET
+gui_cs/bin/
+gui_cs/obj/
+gui_cs/*.user
+gui_cs/*.suo
+gui_cs/.vs/

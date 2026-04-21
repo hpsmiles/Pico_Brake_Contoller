@@ -1,0 +1,120 @@
+<Window x:Class="BrakeCalibrator.Views.CurveEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF"
+        mc:Ignorable="d"
+        Title="Curve Editor" Height="560" Width="640"
+        WindowStartupLocation="CenterOwner"
+        Background="#0D1117"
+        ResizeMode="CanResize"
+        TextElement.Foreground="#E6EDF3">
+
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="../Resources/DarkTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <TextBlock Grid.Row="0" x:Name="HeaderLabel" Text="Brake Curve Editor"
+                   FontSize="16" FontWeight="Bold" Foreground="#58A6FF"
+                   FontFamily="Segoe UI Semibold" Margin="0,0,0,8"/>
+
+        <!-- Interactive Canvas -->
+        <Border Grid.Row="1" Background="#161B22" CornerRadius="8"
+                BorderBrush="#30363D" BorderThickness="1" Margin="0,0,0,8">
+            <Grid>
+                <!-- Reference chart (shows current curve shape) -->
+                <lvc:CartesianChart x:Name="CurveChart" Background="Transparent" Margin="4"/>
+
+                <!-- Draggable overlay canvas for control points -->
+                <Canvas x:Name="PointCanvas"
+                        Background="Transparent"
+                        ClipToBounds="True"
+                        MouseLeftButtonDown="OnCanvasLeftDown"
+                        MouseLeftButtonUp="OnCanvasLeftUp"
+                        MouseMove="OnCanvasMouseMove"
+                        MouseRightButtonDown="OnCanvasRightDown"/>
+            </Grid>
+        </Border>
+
+        <!-- Curve type + preset buttons -->
+        <StackPanel Grid.Row="2" Margin="0,0,0,8">
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Curve Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="CurveCombo" Grid.Column="1"
+                          SelectionChanged="OnCurveComboChanged"/>
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                <TextBlock Text="Presets:" Foreground="#8B949E" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="11"/>
+                <Button Content="Linear" Click="OnPresetLinear" Padding="8,3" FontSize="10" Margin="0,0,4,0"/>
+                <Button Content="Progressive" Click="OnPresetProgressive" Padding="8,3" FontSize="10" Margin="0,0,4,0"/>
+                <Button Content="Aggressive" Click="OnPresetAggressive" Padding="8,3" FontSize="10" Margin="0,0,4,0"/>
+                <Button Content="S-Curve" Click="OnPresetSCurve" Padding="8,3" FontSize="10"/>
+            </StackPanel>
+
+            <!-- Power sliders (visible for progressive/aggressive) -->
+            <Grid x:Name="PowerSlidersPanel" Margin="0,2,0,0"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,8,0">
+                    <TextBlock Text="Progressive Power" FontSize="10" Foreground="#8B949E"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="40"/>
+                        </Grid.ColumnDefinitions>
+                        <Slider x:Name="ProgressiveSlider" Minimum="1.0" Maximum="5.0"
+                                TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                ValueChanged="OnPowerSliderChanged"/>
+                        <TextBlock Grid.Column="1" x:Name="ProgressiveValueLabel"
+                                   Text="2.0" Foreground="#8B949E" VerticalAlignment="Center"
+                                   TextAlignment="Right" FontSize="10"/>
+                    </Grid>
+                </StackPanel>
+                <StackPanel>
+                    <TextBlock Text="Aggressive Power" FontSize="10" Foreground="#8B949E"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="40"/>
+                        </Grid.ColumnDefinitions>
+                        <Slider x:Name="AggressiveSlider" Minimum="1.0" Maximum="5.0"
+                                TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                ValueChanged="OnPowerSliderChanged"/>
+                        <TextBlock Grid.Column="1" x:Name="AggressiveValueLabel"
+                                   Text="2.0" Foreground="#8B949E" VerticalAlignment="Center"
+                                   TextAlignment="Right" FontSize="10"/>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+
+        <!-- Apply / Cancel -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" Click="OnCancel" Padding="16,6" Margin="0,0,8,0"/>
+            <Button Content="Apply" Style="{StaticResource AccentButton}"
+                    Click="OnApply" Padding="16,6"/>
+        </StackPanel>
+    </Grid>
+</Window>
