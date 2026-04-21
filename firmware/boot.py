@@ -7,6 +7,9 @@ which only gives 128 distinct brake values — insufficient for trail-braking.
 This descriptor declares 4 axes (X, Y, Z, Rz) at 16-bit resolution (0-65535).
 Report layout: 8 bytes total — 4 × uint16 little-endian.
 X axis = processed brake, Y axis = raw ADC (for calibration GUI), Z/Rz = 0.
+
+An Output Report (8 bytes host→device) is also declared for commands.
+Sending 0xDE 0xAD 0x00 0x00 0x00 0x00 0x00 0x00 triggers a Pico reboot.
 """
 
 import usb_hid
@@ -47,6 +50,13 @@ GAMEPAD_DESCRIPTOR = bytes(
         0x81,
         0x02,  #     Input (Data, Variable, Absolute)
         0xC0,  #   End Collection (Physical)
+        # Output Report: 8 bytes for host→device commands
+        0x75,
+        0x08,  #     Report Size (8 bits)
+        0x95,
+        0x08,  #     Report Count (8 bytes)
+        0x91,
+        0x02,  #     Output (Data, Variable, Absolute)
         0xC0,  # End Collection (Application)
     )
 )
@@ -57,7 +67,7 @@ gamepad_device = usb_hid.Device(
     usage=0x05,  # Game Pad
     report_ids=(0,),  # Single report, no ID
     in_report_lengths=(8,),  # 4 axes × 2 bytes = 8 bytes
-    out_report_lengths=(0,),  # No output reports
+    out_report_lengths=(8,),  # 8 bytes for host commands (reset, etc.)
 )
 
 usb_hid.enable((gamepad_device,))

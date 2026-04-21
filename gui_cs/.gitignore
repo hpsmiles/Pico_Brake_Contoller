@@ -1,8 +1,0 @@
-## Build outputs
-bin/
-obj/
-publish/
-
-## NuGet
-*.user
-*.suo

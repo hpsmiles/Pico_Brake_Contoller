@@ -55,18 +55,30 @@ except ImportError:
     print("pygame is required. Install with: pip install pygame")
     sys.exit(1)
 
+try:
+    import hid
+    HIDAPI_AVAILABLE = True
+except ImportError:
+    HIDAPI_AVAILABLE = False
+
 
 # --- CIRCUITPY drive detection ---
 
 
 def find_circuitpy_drive():
-    """Find the CIRCUITPY USB drive on any platform."""
+    """Find the Pico USB drive on any platform.
+
+    Searches for volume name 'PIcoBrake' (C++ firmware) or 'CIRCUITPY' (CircuitPython),
+    or falls back to checking for boot_out.txt.
+    """
     system = platform.system()
     if system == "Windows":
         import ctypes
         import string
 
         kernel32 = ctypes.windll.kernel32
+        # Preferred names in order: C++ firmware label first, then CircuitPython
+        preferred_names = ("PIcoBrake", "CIRCUITPY")
         for letter in string.ascii_uppercase:
             drive = f"{letter}:\\"
             if kernel32.GetVolumeNameForVolumeMountPointW:
@@ -75,33 +87,76 @@ def find_circuitpy_drive():
                     if kernel32.GetVolumeInformationW(
                         drive, volume_name, 256, None, None, None, None, 0
                     ):
-                        if volume_name.value == "CIRCUITPY":
+                        if volume_name.value in preferred_names:
                             return drive
                 except Exception:
                     continue
-        # Fallback: check for boot_out.txt (CircuitPython always creates this)
+        # Fallback: check for boot_out.txt (CircuitPython) or calibration.json (C++ firmware)
         for letter in string.ascii_uppercase:
             drive = f"{letter}:\\"
             if os.path.exists(drive):
                 try:
                     if os.path.exists(os.path.join(drive, "boot_out.txt")):
                         return drive
+                    if os.path.exists(os.path.join(drive, "calibration.json")):
+                        # Heuristic: if this drive has calibration.json but no boot_out.txt,
+                        # it might be our C++ firmware drive. Check volume name contains known strings.
+                        volume_name = ctypes.create_unicode_buffer(256)
+                        if kernel32.GetVolumeInformationW(
+                            drive, volume_name, 256, None, None, None, None, 0
+                        ):
+                            if any(kw in volume_name.value.upper() for kw in ("PICO", "BRAKE")):
+                                return drive
                 except Exception:
                     continue
     elif system == "Linux":
         import glob
 
-        paths = glob.glob("/media/*/CIRCUITPY")
-        if paths:
-            return paths[0]
-        paths = glob.glob("/run/media/*/CIRCUITPY")
-        if paths:
-            return paths[0]
+        for name in ("PIcoBrake", "CIRCUITPY"):
+            paths = glob.glob(f"/media/*/{name}")
+            if paths:
+                return paths[0]
+            paths = glob.glob(f"/run/media/*/{name}")
+            if paths:
+                return paths[0]
     elif system == "Darwin":  # macOS
-        path = "/Volumes/CIRCUITPY"
-        if os.path.exists(path):
-            return path
+        for name in ("PIcoBrake", "CIRCUITPY"):
+            path = f"/Volumes/{name}"
+            if os.path.exists(path):
+                return path
     return None
+
+
+# --- Pico reset via HID Output Report ---
+
+
+def reset_pico_via_hid():
+    """Send a reset command to the Pico via HID Output Report.
+
+    The firmware watches for 0xDE 0xAD in the Output Report and reboots.
+    Returns True if the command was sent, False if hidapi unavailable or device not found.
+    """
+    if not HIDAPI_AVAILABLE:
+        return False
+
+    try:
+        # Enumerate HID devices and find our gamepad
+        for dev_info in hid.enumerate():
+            # Match: Generic Desktop (0x01) / Game Pad (0x05)
+            if dev_info["usage_page"] == 0x01 and dev_info["usage"] == 0x05:
+                try:
+                    device = hid.device()
+                    device.open_path(dev_info["path"])
+                    # Send reset command: 0xDE 0xAD + 6 padding bytes
+                    # First byte is report ID (0 for single-report devices)
+                    device.write(b"\x00\xDE\xAD\x00\x00\x00\x00\x00\x00")
+                    device.close()
+                    return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return False
 
 
 # --- Pico gamepad reader via pygame ---
@@ -667,7 +722,7 @@ class BrakeCalibrator(tk.Tk):
             right, text="Save to Pico", command=self._save_calibration
         )
         self.save_btn.pack(fill=tk.X, pady=(5, 0))
-        ToolTip(self.save_btn, "Write calibration.json to CIRCUITPY drive.\nPress RESET on Pico afterwards to apply changes.")
+        ToolTip(self.save_btn, "Write calibration.json to CIRCUITPY drive.\nPico will auto-reset to apply changes (requires hidapi).")
 
         # Status bar
         self.status_var = tk.StringVar(value="Initializing...")
@@ -1506,10 +1561,22 @@ class BrakeCalibrator(tk.Tk):
         try:
             with open(filepath, "w") as f:
                 json.dump(cal, f, indent=2)
-            messagebox.showinfo(
-                "Saved",
-                f"Calibration saved to {filepath}\n\nPress RESET on Pico or reconnect.",
-            )
+
+            # Try to reset the Pico via HID so it reloads calibration.json
+            time.sleep(0.3)  # Brief delay to ensure file write completes
+            reset_ok = reset_pico_via_hid()
+            if reset_ok:
+                messagebox.showinfo(
+                    "Saved & Reset",
+                    f"Calibration saved to {filepath}\n\nPico is resetting to apply changes.",
+                )
+            else:
+                messagebox.showinfo(
+                    "Saved",
+                    f"Calibration saved to {filepath}\n\n"
+                    "Press RESET on Pico to apply changes.\n\n"
+                    "(Install hidapi for automatic reset: pip install hidapi)",
+                )
         except OSError as e:
             messagebox.showerror("Error", f"Could not write to CIRCUITPY:\n{e}")
 
