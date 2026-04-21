@@ -743,10 +743,7 @@ public class MainForm : Form
     private void ThrottleEnableCheck_CheckedChanged(object? sender, EventArgs e)
     {
         UpdateThrottleVisibility();
-        // Clear histories for clean graph
-        _rawHistory.Clear();
-        _previewHistory.Clear();
-        _gameInputHistory.Clear();
+        // Clear throttle history when disabled (Python only clears throttle histories)
         _throttleHistory.Clear();
     }
 
