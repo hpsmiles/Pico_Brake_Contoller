@@ -35,6 +35,9 @@ namespace BrakeCalibrator.Services
         private double _processedThrottle;
         private double _rawThrottle;
 
+        // Raw DirectInput values (signed int16 as received from driver)
+        private int _rawDiX, _rawDiY, _rawDiZ, _rawDiRz;
+
         public double ProcessedBrake { get { lock (_lock) return _processedBrake; } }
         public double RawBrake { get { lock (_lock) return _rawBrake; } }
         public double ProcessedThrottle { get { lock (_lock) return _processedThrottle; } }
@@ -42,6 +45,12 @@ namespace BrakeCalibrator.Services
 
         public int RawBrakeInt => (int)(RawBrake * 65535);
         public int RawThrottleInt => (int)(RawThrottle * 65535);
+
+        // Raw DirectInput axis values (diagnostic — signed int16 from driver)
+        public int DiX { get { lock (_lock) return _rawDiX; } }
+        public int DiY { get { lock (_lock) return _rawDiY; } }
+        public int DiZ { get { lock (_lock) return _rawDiZ; } }
+        public int DiRz { get { lock (_lock) return _rawDiRz; } }
 
         public string DeviceName { get; private set; } = "";
         public bool IsConnected => _joystick != null;
@@ -134,6 +143,12 @@ namespace BrakeCalibrator.Services
 
                 lock (_lock)
                 {
+                    // Store raw DirectInput values (diagnostic)
+                    _rawDiX = state.X;
+                    _rawDiY = state.Y;
+                    _rawDiZ = state.Z;
+                    _rawDiRz = state.RotationZ;
+
                     // For a 4-axis gamepad, DirectInput maps:
                     //   X  = axis 0 → processed brake
                     //   Y  = axis 1 → raw brake ADC
@@ -166,13 +181,14 @@ namespace BrakeCalibrator.Services
         /// <summary>
         /// Map DirectInput axis value to 0.0–1.0.
         /// The Pico HID descriptor uses 16-bit unsigned (0–65535) axes.
-        /// DirectInput returns raw values matching the HID logical range.
-        /// Matches pygame: get_axis returns -1..1, then (raw+1)/2 = 0..1.
-        /// Since DirectInput returns 0..65535 directly, we just divide.
+        /// DirectInput returns signed int16 values: values 0..32767 map correctly,
+        /// but 32768..65535 appear as -32768..-1 (signed interpretation of unsigned).
+        /// We cast to ushort to recover the original unsigned value before normalizing.
         /// </summary>
         private static double MapAxis(int value)
         {
-            return Math.Max(0.0, Math.Min(1.0, value / 65535.0));
+            ushort unsigned = (ushort)value;
+            return Math.Max(0.0, Math.Min(1.0, unsigned / 65535.0));
         }
 
         public void Disconnect()

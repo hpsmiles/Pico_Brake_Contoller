@@ -40,8 +40,8 @@ static const uint8_t GAMEPAD_HID_DESCRIPTOR[] = {
     0x09, 0x31,        //     Usage (Y)
     0x09, 0x32,        //     Usage (Z)
     0x09, 0x35,        //     Usage (Rz)
-    0x16, 0x00, 0x00,  //     Logical Minimum (0)
-    0x26, 0xFF, 0xFF,  //     Logical Maximum (65535)
+    0x17, 0x00, 0x00, 0x00, 0x00,  //     Logical Minimum (0) — 4-byte signed
+    0x27, 0xFF, 0xFF, 0x00, 0x00,  //     Logical Maximum (65535) — 4-byte signed
     0x75, 0x10,        //     Report Size (16 bits)
     0x95, 0x04,        //     Report Count (4 axes)
     0x81, 0x02,        //     Input (Data, Variable, Absolute)

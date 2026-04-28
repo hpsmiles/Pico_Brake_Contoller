@@ -83,6 +83,9 @@ using SkiaSharp;namespace BrakeCalibrator.ViewModels
         [ObservableProperty] private string _calStatus = "";
         [ObservableProperty] private bool _isAutoCalibrating = false;
 
+        // Diagnostics (raw DirectInput values)
+        [ObservableProperty] private string _diagnosticText = "";
+
         // Profiles
         [ObservableProperty] private ObservableCollection<string> _profiles = new();
         [ObservableProperty] private int _selectedProfileIndex = -1;
@@ -434,6 +437,10 @@ using SkiaSharp;namespace BrakeCalibrator.ViewModels
             // Show axis debug info in status
             if (!string.IsNullOrEmpty(_reader.AxisDebugInfo))
                 AxisDebugText = _reader.AxisDebugInfo;
+
+            // Update diagnostic display (raw DirectInput ints + mapped values)
+            DiagnosticText = $"DI: X={_reader.DiX} Y={_reader.DiY} Z={_reader.DiZ} Rz={_reader.DiRz} | " +
+                             $"Mapped: Raw={rawBrake:F3}({rawBrake*65535:F0}) Proc={procBrake:F3}({procBrake*65535:F0})";
 
             // Compute preview (local pipeline)
             var brakeCal = GetCurrentBrakeCal();

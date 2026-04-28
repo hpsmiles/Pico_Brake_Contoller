@@ -452,6 +452,10 @@
             <StatusBarItem>
                 <TextBlock Text="{Binding AxisDebugText}" FontSize="10" Foreground="#8B949E"/>
             </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <TextBlock Text="{Binding DiagnosticText}" FontSize="10" Foreground="#D29922" FontWeight="Medium"/>
+            </StatusBarItem>
         </StatusBar>
     </Grid>
 </Window>
