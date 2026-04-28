@@ -45,10 +45,8 @@ Pneumatic brake + throttle controller for the Sim Sonn Pro pedal. Uses a Raspber
 **C# GUI** (new WPF-based, dark theme, modern charts):
 
 1. Requires [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-2. Run the published exe from `gui_cs/bin/Release/BrakeCalibrator.exe`, or build from source:
-   ```
-   dotnet run --project gui_cs
-   ```
+2. Build and run from source: `dotnet run --project gui_cs`
+3. Or publish a standalone exe: `dotnet publish gui_cs -c Release -r win-x64` → `gui_cs/bin/Release/net8.0-windows/win-x64/publish/BrakeCalibrator.exe`
 
 **Shared calibration flow** (both GUIs):
 
