@@ -150,11 +150,9 @@ Load Cell          HX711 Breakout       RPi Pico
 
 - Power HX711 from VSYS (5V) — the breakout has on-board level shifting
 - Data rate: 10 SPS (RATE pin low) or 80 SPS (RATE pin high)
-- Channel A gain: 128 (default), 64, or 32. Channel B gain: 32.
-- Calibration is done via `tare()` (zero) and `determine_scalar()` (scale factor)
-- The HX711 reads raw 24-bit values; firmware normalizes to 0–65535 for HID
-- **When using HX711, GP27 is used for DATA (digital), not ADC1**
-- Install library: copy `adafruit_hx711/` folder to CIRCUITPY/lib/
+- Channel A gain: 128 (default). The firmware uses Channel A gain 128.
+- The HX711 reads raw 24-bit values; firmware bit-bangs the SPI interface and normalises to 0–65535 for HID
+- **When using HX711, GP16 is DATA and GP28 is SCK — both digital, no ADC used**
 
 ---
 
@@ -165,18 +163,17 @@ in `calibration.json` determines which is active:
 
 ```json
 {
-  "throttle_sensor": "auto"   // "auto" = auto-detect on boot
-                              // "hall" = force SS49E on GP27 ADC1
-                              // "load_cell" = force HX711 on GP16+GP28
+  "throttle_sensor": "auto"   // "auto"  = auto-detect on boot
+                              // "hall"  = force SS49E on GP27 ADC1
+                              // "hx711" = force HX711 on GP16+GP28
 }
 ```
 
-- **SS49E** reads via `analogio.AnalogIn(board.GP27)` — same code path as brake
-- **HX711** reads via `adafruit_hx711` on GP16 (DATA) + GP28 (SCK)
+- **SS49E** reads via ADC on GP27 — same pipeline as brake
+- **HX711** reads via bit-bang SPI on GP16 (DATA) + GP28 (SCK) — built into firmware, no library needed
 - Both can be wired simultaneously — firmware auto-detects which is present
-- **Auto-detection:** On boot, probe HX711 on GP16+GP28 (DATA goes LOW when data ready).
+- **Auto-detection:** On boot, probe GP16 for HX711 DATA-ready signal (goes LOW when data ready).
   If HX711 responds → use load cell. If no response → use SS49E on GP27 ADC1.
-  The `throttle_sensor` key in calibration.json can override auto-detection if set.
 
 ---
 
@@ -191,4 +188,4 @@ in `calibration.json` determines which is active:
 | GP16 | HX711 DATA (digital input — load cell only) |
 | GP27 | ADC1 — throttle analog input (SS49E via voltage divider) |
 | GP28 | HX711 SCK (digital output — load cell only) |
-| LED | Onboard LED (status indicator) |
+| GP23 | WS2812 RGB LED data (status indicator) |

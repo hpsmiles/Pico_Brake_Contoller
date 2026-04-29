@@ -2,83 +2,87 @@
 
 ## Project
 
-Sim racing pneumatic brake + throttle controller for Sim Sonn Pro pedal. RPi Pico (RP2040) + XDB401 pressure sensor (brake) + SS49E Hall Effect or HX711 load cell (throttle). C++/Arduino-Pico firmware (production, deterministic 1kHz HID, dual-core). Tkinter calibration GUI with serial-based calibration (no reboot needed). **CircuitPython firmware is legacy/prototyping only — only care about C++ firmware.**
-
-**Current release:** v0.2
+Sim racing pneumatic brake + throttle controller for Sim Sonn Pro pedal. RPi Pico (RP2040) + XDB401 pressure sensor (brake) + SS49E Hall Effect or HX711 load cell (throttle). C++/Arduino-Pico firmware (production, deterministic 1kHz HID, dual-core). Python/Tkinter calibration GUI with serial-based calibration (no reboot needed). CircuitPython firmware is legacy/prototyping only — only care about C++ firmware.
 
 ## Commands
 
 - Run calibration GUI: `python gui/calibrator.py`
-- Build GUI exe: `.venv/Scripts/pyinstaller.exe --onefile --windowed --name BrakeCalibrator --distpath dist gui/calibrator.py`
-- Build C++ firmware: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_65536" --build-path firmware_cpp/build firmware_cpp`
-- No test suite yet
+- Build GUI exe: `.venv\Scripts\python.exe -m PyInstaller BrakeCalibrator.spec --distpath dist --workpath build_pyinstaller --noconfirm`
+- Build C++ firmware: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_1048576,usbstack=tinyusb" --build-path firmware_cpp/build firmware_cpp`
+- Flash via serial (no button): send `REBOOT BOOTSEL\n` on COM port at 115200 baud (DTR asserted), then copy .uf2 to RPI-RP2 drive
+- No test suite
 
 ## Architecture
 
-- `firmware/boot.py` — Custom 16-bit USB HID gamepad descriptor (runs before code.py)
-- `firmware/code.py` — Main Pico firmware (CircuitPython): ADC read → oversample → clamp (with saturation) → normalize → deadzone → bite point → curve → EMA → HID send (X=brake, Y=raw ADC for GUI, Z=processed throttle, Rz=raw throttle)
-- `firmware_cpp/` — C++ firmware port (Arduino-Pico): same signal pipeline, deterministic 1000Hz HID, dual-core
-- `gui/calibrator.py` — PC-side Tkinter calibration tool (pygame-ce for HID input, sends calibration via serial CAL command)
-- `calibration.json` — Device-specific, NOT in repo, lives on Pico only
+- `firmware_cpp/` — C++ firmware (Arduino-Pico): dual-core, serial calibration, FatFS storage
+- `gui/calibrator.py` — PC-side Tkinter calibration tool (pygame for HID, pyserial for CAL commands)
+- `calibration.json` — Lives on Pico flash only, NOT in repo
 
-## C++ Firmware (Arduino-Pico)
+## C++ Firmware Files
 
-- `firmware_cpp/firmware_cpp.ino` — Entry point: dual-core main loop (Core 0: USB + HID send, Core 1: ADC + processing)
-- `firmware_cpp/config.h` — Pin defs, Calibration/ChannelCal structs, HID descriptor (4×uint16, no Output Report)
-- `firmware_cpp/adc_reader.h/.cpp` — ADC init + oversampled read (12→16 bit scaling matching CircuitPython)
-- `firmware_cpp/hx711_driver.h/.cpp` — HX711 bit-bang driver with probe/read/16-bit mapping
-- `firmware_cpp/signal_processing.h/.cpp` — Clamp, normalize, deadzone, bite, curve (linear/progressive/aggressive/custom), EMA, invert
-- `firmware_cpp/calibration.h/.cpp` — JSON config loading/saving via ArduinoJson v7 + FatFS. `load_calibration()`, `parse_calibration_json()`, `save_calibration()`.
-- `firmware_cpp/msc_disk.h/.cpp` — FatFS + FatFSUSB (HID gamepad + MSC drive on same USB). Full read-write PC access with cooperative exclusion (onPlug/onUnplug). Content-hash-based hot-reload every 2s. Volume label "BRAKECTL". `msc_disk_begin_fs()` for safe Pico-side FatFS access.
+| File | Purpose |
+|------|---------|
+| `firmware_cpp.ino` | Entry point: dual-core setup/loop (Core 0: USB+serial, Core 1: ADC+processing) |
+| `config.h` | Pin defs, Calibration/ChannelCal structs, HID descriptor (4×uint16, no Output Report) |
+| `adc_reader.h/.cpp` | ADC init + oversampled read (12→16-bit scaling) |
+| `hx711_driver.h/.cpp` | HX711 bit-bang driver with probe/read/16-bit mapping |
+| `signal_processing.h/.cpp` | Clamp, normalize, deadzone, bite, curve (linear/progressive/aggressive/custom), EMA, invert |
+| `flash_storage.h/.cpp` | FatFS init, calibration.json load/save, profile CRUD (`/profiles/<name>.json`) |
+| `serial_commands.h/.cpp` | Serial command parser: CAL, REBOOT, REBOOT BOOTSEL, PROFILE SAVE/LOAD/DELETE/LIST, STATUS |
+| `rgb_led.h/.cpp` | WS2812 RGB LED status (GP23): Orange=boot, Green=cal loaded, Red=defaults, blink codes |
 
-Build: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_65536" --build-path firmware_cpp/build firmware_cpp`
-Flash: Copy `firmware_cpp/build/firmware_cpp.ino.uf2` to Pico via BOOTSEL
-Same calibration.json format as CircuitPython firmware, same GUI, same wiring.
-**NOTE:** HID Output Report NOT supported with arduino-pico USB stack (causes CM_PROB_FAILED_START).
-**Serial calibration:** GUI sends `CAL <json>\n` over serial. Firmware parses JSON, applies immediately (no reboot), and writes to its own FatFS for persistence. This is the primary calibration path.
-**REBOOT command:** GUI can send `REBOOT\n` over serial for explicit reboot (watchdog_reboot with FatFSUSB.unplug flush first).
-**NOTE:** Windows doesn't send SCSI START_STOP_UNIT, so onPlug/onUnplug cooperative exclusion callbacks never fire on Windows. The MSC drive stays mounted while Windows has it. Pico avoids accessing FatFS during this time.
-**NOTE:** `--board-options "flash=2097152_65536"` is REQUIRED — default FQBN has no filesystem partition.
-LED status: 1 blink=Hall, 2 blinks=HX711, 3 blinks=defaults, 10 rapid=fatal
-RGB LED (GP23): Green=calibration loaded, Red=defaults/no calibration, Orange=booting
+Build: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_1048576,usbstack=tinyusb" --build-path firmware_cpp/build firmware_cpp`
+
+Flash: Copy `firmware_cpp/build/firmware_cpp.ino.uf2` to Pico via BOOTSEL, OR send `REBOOT BOOTSEL\n` over serial to avoid pressing the button.
+
+USB identity: VID=0x239A (Adafruit/TinyUSB), PID=0xCAFE. Composite device: CDC serial (COM port) + HID gamepad.
 
 ## Key constraints
 
-- boot.py only configures USB HID — does NOT call storage.remount(), CIRCUITPY stays USB-writable
-- No adafruit_hid library — custom descriptor + raw report bytes
-- HID report: 8 bytes (4 × uint16 LE axes). X=processed brake, Y=raw ADC for calibration GUI, Z=processed throttle, Rz=raw throttle ADC.
-- Pico ADC is 12-bit, CircuitPython maps to 0-65535. Oversampling default 16x for noise reduction.
+- No USB MSC drive — calibration is sent via serial CAL command only
+- FatFS partition: 1MB (`flash=2097152_1048576`), `useFTL=false` (raw 4096-byte sectors). 64KB was below f_mkfs 128-sector minimum. SPIFTL disabled because it cannot parse pre-existing non-SPIFTL flash content.
+- `usbstack=tinyusb` board option is REQUIRED — without it the compiler errors with "TinyUSB is not selected"
+- USB setup order: `usb_hid.begin()` then `Serial.begin()` — reversed order drops the CDC interface. Use `delay(1500)` not `while(!TinyUSBDevice.mounted())` which blocks forever on this port.
+- CDC serial requires DTR asserted before TinyUSB flushes TX. pyserial sets DTR by default.
+- HID Logical Maximum must be 4-byte (`0x27 0xFF 0xFF 0x00 0x00` = 65535 signed 32-bit). 2-byte (`0x26 0xFF 0xFF`) encodes -1, causing axis wrap past 32767.
+- HID report: 8 bytes (4×uint16 LE). X=processed brake, Y=raw brake, Z=processed throttle, Rz=raw throttle.
+- ADC is 12-bit, scaled to 16-bit via `(avg << 4) | (avg >> 8)`. Oversampling default 16×.
 - Brake wiring: VCC→VSYS(5V), Signal→R1(2K)→GP26, R2(3.3K)→GND
-- Throttle has two sensor options (one active at a time, set in calibration.json `throttle_sensor`):
-  - **SS49E Hall Effect**: VCC→VSYS(5V), Vout→R3(2K)→GP27(ADC1), R4(3.3K)→GND (same voltage divider as brake)
-  - **HX711 load cell**: HX711 VIN→VSYS(5V), GND→GND, SCK→GP28, DATA→GP16 (uses `adafruit_hx711` library)
-- SS49E reads via analogio on GP27 (same code path as brake), HX711 reads via pseudo-SPI on GP16+GP28 (different code path)
-- Both can be wired simultaneously — firmware auto-detects HX711 on boot (probes GP16 for data-ready signal), falls back to SS49E on GP27
-- Smoothing slider: 0 = none, 0.95 = max. Internally alpha = 1 - smoothing (higher slider = more filtering)
-- Saturation (0.1–1.0, default 1.0): Scales the effective raw_max, so you can reach 100% output without pressing as hard
-- Bite point (0.0–0.5, default 0.0): Dead-travel zone simulating pad-to-rotor gap; applied after deadzone but before curve
-- Curve types: linear, progressive (t^n), aggressive (t^(1/n)), custom (piecewise-linear through editable control points)
-- Custom curves: `curve_points` list of `[input, output]` pairs; linear interpolation between points; editable in GUI via drag-to-edit
-- Profiles: stored in `profiles/` directory on BRAKECTL drive as full calibration.json copies; GUI saves/loads/deletes profiles
-- BRAKECTL MSC drive is always USB-visible from PC — mainly for profiles and manual inspection; calibration is sent via serial
+- Throttle sensors (set via `throttle_sensor` in calibration, default `"auto"`):
+  - **SS49E Hall Effect**: VCC→VSYS(5V), Vout→R3(2K)→GP27(ADC1), R4(3.3K)→GND
+  - **HX711 load cell**: VIN→VSYS(5V), GND→GND, SCK→GP28, DATA→GP16
+- Both throttle sensors can be wired simultaneously — auto-detects HX711 on boot (probes GP16 for data-ready signal LOW)
+- Smoothing slider: 0=none, 0.95=max. Internally `alpha = 1 - smoothing`.
+- Saturation (0.1–1.0): Scales effective raw_max — reach 100% output with less force.
+- Bite point (0.0–0.5): Dead-travel zone simulating pad-to-rotor gap; applied after deadzone, before curve.
+- Curve types: linear, progressive (t^n), aggressive (t^1/n), custom (piecewise-linear).
+- Profiles stored in `/profiles/` on firmware flash. Managed via serial PROFILE commands or GUI.
+- HID Output Report NOT supported with arduino-pico (causes CM_PROB_FAILED_START on Windows).
+
+## Serial Commands
+
+115200 baud, newline-terminated, DTR asserted:
+
+| Command | Response | Description |
+|---------|----------|-------------|
+| `CAL <json>` | `CAL OK` / `CAL ERR` | Apply + persist calibration, reset EMA |
+| `REBOOT` | `OK` | Watchdog reboot into application |
+| `REBOOT BOOTSEL` | `OK` | Reboot into USB bootloader |
+| `PROFILE SAVE <name>` | `PROFILE OK` / `PROFILE ERR` | Save named profile |
+| `PROFILE LOAD <name>` | `PROFILE OK` / `PROFILE ERR` | Load + activate named profile |
+| `PROFILE DELETE <name>` | `PROFILE OK` / `PROFILE ERR` | Delete named profile |
+| `PROFILE LIST` | `PROFILE <names>` / `PROFILE NONE` | List profiles |
+| `STATUS` | Multi-line | FatFS state + write test |
 
 ## GUI features
 
-- **3-line live graph:** Blue = Raw Input, Green = Calibrated Input (settings applied locally), Red = Game Input (actual Pico output), Orange = Throttle (when enabled)
+- **3-line live graph:** Blue=Raw Input, Green=Calibrated Input (settings applied locally), Red=Game Input (Pico output), Orange=Throttle
 - **Device selector:** Dropdown lists all connected gamepads, auto-selects device with "pico" in name
-- **Auto-calibration:** Single-window flow — 3s countdown → 5s capture (tracks min and max)
-- **Preview line:** Applies current curve/smoothing/deadzone/min/max/saturation/bite-point settings locally in real time, no save+reboot needed
-- **Interactive curve editor:** Drag-to-edit control points on graph; click to add points, right-click to delete; preset buttons (Linear, Progressive, Aggressive, S-curve)
-- **Profiles:** Save, load, and delete named calibration profiles stored on CIRCUITPY
-- **Save flow:** Save to Pico sends `CAL <json>\n` over serial; firmware applies immediately and writes to its own FatFS for persistence (no reboot needed)
-
-## Setup (fresh Pico)
-
-1. Flash CircuitPython .uf2 via BOOTSEL
-2. Copy boot.py + code.py to CIRCUITPY root
-3. Wire sensor
-4. Pico appears as USB gamepad
-5. Run gui/calibrator.py to calibrate
+- **Auto-calibration:** 3s countdown → 5s capture (tracks min and max raw ADC values)
+- **Preview line:** Applies current slider settings locally in real time, no save needed
+- **Interactive curve editor:** Drag-to-edit control points; click to add, right-click to delete; presets
+- **Profiles:** Managed via serial PROFILE commands (GUI calls them in background thread)
+- **Save flow:** Sends `CAL <json>\n` over serial (VID=0x239A/PID=0xCAFE); firmware applies immediately and persists
 
 ## calibration.json format
 
