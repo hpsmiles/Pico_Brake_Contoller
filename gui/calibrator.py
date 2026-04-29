@@ -2,8 +2,9 @@
 """Brake controller calibration GUI.
 
 Reads live brake and throttle data from Pico HID gamepad via pygame,
-provides manual and auto-calibration, and writes
-calibration.json to the CIRCUITPY USB drive.
+provides manual and auto-calibration, and sends calibration to the
+Pico via serial (CAL command). No reboot needed — firmware applies
+immediately and persists to its own FatFS.
 
 Usage:
     python calibrator.py
@@ -14,6 +15,7 @@ import os
 import platform
 import sys
 import time
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 
@@ -55,18 +57,30 @@ except ImportError:
     print("pygame is required. Install with: pip install pygame")
     sys.exit(1)
 
+try:
+    import hid
+    HIDAPI_AVAILABLE = True
+except ImportError:
+    HIDAPI_AVAILABLE = False
+
 
 # --- CIRCUITPY drive detection ---
 
 
 def find_circuitpy_drive():
-    """Find the CIRCUITPY USB drive on any platform."""
+    """Find the Pico USB drive on any platform.
+
+    Searches for volume name 'BRAKECTL' (C++ firmware), 'PIcoBrake' (legacy C++), or 'CIRCUITPY' (CircuitPython),
+    or falls back to checking for boot_out.txt.
+    """
     system = platform.system()
     if system == "Windows":
         import ctypes
         import string
 
         kernel32 = ctypes.windll.kernel32
+        # Preferred names in order: C++ firmware label first, then CircuitPython
+        preferred_names = ("BRAKECTL", "PIcoBrake", "CIRCUITPY")
         for letter in string.ascii_uppercase:
             drive = f"{letter}:\\"
             if kernel32.GetVolumeNameForVolumeMountPointW:
@@ -75,33 +89,181 @@ def find_circuitpy_drive():
                     if kernel32.GetVolumeInformationW(
                         drive, volume_name, 256, None, None, None, None, 0
                     ):
-                        if volume_name.value == "CIRCUITPY":
+                        if volume_name.value in preferred_names:
                             return drive
                 except Exception:
                     continue
-        # Fallback: check for boot_out.txt (CircuitPython always creates this)
+        # Fallback: check for boot_out.txt (CircuitPython) or calibration.json (C++ firmware)
         for letter in string.ascii_uppercase:
             drive = f"{letter}:\\"
             if os.path.exists(drive):
                 try:
                     if os.path.exists(os.path.join(drive, "boot_out.txt")):
                         return drive
+                    if os.path.exists(os.path.join(drive, "calibration.json")):
+                        # Heuristic: if this drive has calibration.json but no boot_out.txt,
+                        # it might be our C++ firmware drive. Check volume name contains known strings.
+                        volume_name = ctypes.create_unicode_buffer(256)
+                        if kernel32.GetVolumeInformationW(
+                            drive, volume_name, 256, None, None, None, None, 0
+                        ):
+                            if any(kw in volume_name.value.upper() for kw in ("PICO", "BRAKE")):
+                                return drive
                 except Exception:
                     continue
     elif system == "Linux":
         import glob
 
-        paths = glob.glob("/media/*/CIRCUITPY")
-        if paths:
-            return paths[0]
-        paths = glob.glob("/run/media/*/CIRCUITPY")
-        if paths:
-            return paths[0]
+        for name in ("BRAKECTL", "PIcoBrake", "CIRCUITPY"):
+            paths = glob.glob(f"/media/*/{name}")
+            if paths:
+                return paths[0]
+            paths = glob.glob(f"/run/media/*/{name}")
+            if paths:
+                return paths[0]
     elif system == "Darwin":  # macOS
-        path = "/Volumes/CIRCUITPY"
-        if os.path.exists(path):
-            return path
+        for name in ("BRAKECTL", "PIcoBrake", "CIRCUITPY"):
+            path = f"/Volumes/{name}"
+            if os.path.exists(path):
+                return path
     return None
+
+
+# --- Pico reset via HID Output Report ---
+
+
+def reset_pico_via_serial():
+    """Send a REBOOT command to the Pico via its USB Serial port.
+
+    The C++ firmware listens for 'REBOOT\\n' on Serial and watchdog-reboots.
+    Returns True if the command was sent, False if no Pico serial port found.
+    """
+    try:
+        import serial.tools.list_ports
+    except ImportError:
+        return False
+
+    try:
+        # Find Pico serial port by USB VID (0x2E8A = Raspberry Pi)
+        for port in serial.tools.list_ports.comports():
+            if port.vid == 0x2E8A:
+                try:
+                    import serial
+                    ser = serial.Serial(port.device, baudrate=115200, timeout=2)
+                    time.sleep(0.1)  # Wait for serial ready
+                    ser.write(b"REBOOT\n")
+                    ser.flush()
+                    # Wait briefly for response
+                    time.sleep(0.2)
+                    ser.close()
+                    return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return False
+
+
+def find_pico_serial_port():
+    """Find the Pico's serial port (COM device) by USB VID and PID.
+
+    Prefers PID 0x000E (arduino-pico composite: Serial+MSC+HID).
+    Falls back to any RP2 VID match.
+
+    Returns the device path (e.g. 'COM6') or None.
+    """
+    try:
+        import serial.tools.list_ports
+    except ImportError:
+        return None
+
+    try:
+        fallback = None
+        for port in serial.tools.list_ports.comports():
+            if port.vid == 0x2E8A:
+                if port.pid == 0x000E:
+                    return port.device  # Our firmware — prefer this
+                fallback = port.device
+        return fallback  # Any Pico if no exact PID match
+    except Exception:
+        pass
+    return None
+
+
+def send_calibration_via_serial(cal_dict):
+    """Send calibration to the Pico via the CAL serial command.
+
+    The firmware parses the JSON, applies it immediately, and writes
+    it to its own FatFS for persistence. No reboot needed.
+
+    Returns (True, message) on success, (False, message) on failure.
+    """
+    try:
+        import serial.tools.list_ports
+        import serial as pyserial
+    except ImportError:
+        return False, "pyserial not installed. Install with: pip install pyserial"
+
+    cal_json = json.dumps(cal_dict, separators=(',', ':'))
+
+    try:
+        port_path = find_pico_serial_port()
+        if not port_path:
+            return False, "Pico serial port not found"
+
+        ser = pyserial.Serial(port_path, baudrate=115200, timeout=1)
+        time.sleep(0.1)  # Wait for serial connection to settle
+
+        # Send "CAL <json>\n"
+        cmd = b"CAL " + cal_json.encode("utf-8") + b"\n"
+        ser.write(cmd)
+        ser.flush()
+
+        # Wait for response (firmware sends "CAL OK" or "CAL ERR")
+        time.sleep(0.1)
+        response = ser.read(ser.in_waiting or 64).decode("utf-8", errors="replace").strip()
+        ser.close()
+
+        if "CAL OK" in response:
+            return True, "Calibration applied immediately. No reboot needed."
+        elif "CAL ERR" in response:
+            return False, "Pico reported JSON parse error"
+        else:
+            return True, f"Calibration sent (response: {response or 'none'})"
+
+    except pyserial.SerialTimeoutException:
+        return False, "Serial write timeout — Pico may not be ready"
+    except Exception as e:
+        return False, f"Serial error: {e}"
+
+
+def reset_pico_via_hid():
+    """Send a reset command to the Pico via HID Output Report.
+
+    The firmware watches for 0xDE 0xAD in the Output Report and reboots.
+    Returns True if the command was sent, False if hidapi unavailable or device not found.
+    """
+    if not HIDAPI_AVAILABLE:
+        return False
+
+    try:
+        # Enumerate HID devices and find our gamepad
+        for dev_info in hid.enumerate():
+            # Match: Generic Desktop (0x01) / Game Pad (0x05)
+            if dev_info["usage_page"] == 0x01 and dev_info["usage"] == 0x05:
+                try:
+                    device = hid.device()
+                    device.open_path(dev_info["path"])
+                    # Send reset command: 0xDE 0xAD + 6 padding bytes
+                    # First byte is report ID (0 for single-report devices)
+                    device.write(b"\x00\xDE\xAD\x00\x00\x00\x00\x00\x00")
+                    device.close()
+                    return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return False
 
 
 # --- Pico gamepad reader via pygame ---
@@ -319,7 +481,7 @@ class BrakeCalibrator(tk.Tk):
         info_frame = ttk.Frame(self.left_frame)
         info_frame.pack(fill=tk.X, pady=(5, 0))
 
-        self.raw_label = ttk.Label(info_frame, text="Raw ADC: --")
+        self.raw_label = ttk.Label(info_frame, text="Raw Input: --")
         self.raw_label.pack(side=tk.LEFT, padx=5)
 
         self.norm_label = ttk.Label(info_frame, text="Brake: --")
@@ -667,7 +829,7 @@ class BrakeCalibrator(tk.Tk):
             right, text="Save to Pico", command=self._save_calibration
         )
         self.save_btn.pack(fill=tk.X, pady=(5, 0))
-        ToolTip(self.save_btn, "Write calibration.json to CIRCUITPY drive.\nPress RESET on Pico afterwards to apply changes.")
+        ToolTip(self.save_btn, "Send calibration to Pico via serial.\nApplies immediately — no reboot needed.")
 
         # Status bar
         self.status_var = tk.StringVar(value="Initializing...")
@@ -1173,12 +1335,13 @@ class BrakeCalibrator(tk.Tk):
         return self._throttle_preview_ema
 
     def _update_status(self):
-        """Update drive and device status."""
+        """Update device status."""
         parts = []
-        if self.circuitpy_drive:
-            parts.append(f"Drive: {self.circuitpy_drive}")
+        pico_port = find_pico_serial_port()
+        if pico_port:
+            parts.append(f"Serial: {pico_port}")
         else:
-            parts.append("CIRCUITPY drive not found")
+            parts.append("Pico not found (serial)")
         if self.reader.connected:
             parts.append(f"Device: {self.reader.device_name}")
         else:
@@ -1430,7 +1593,7 @@ class BrakeCalibrator(tk.Tk):
     def _save_profile(self):
         """Save current settings as a named profile."""
         if not self.circuitpy_drive:
-            messagebox.showerror("Error", "CIRCUITPY drive not found.")
+            messagebox.showerror("Error", "BRAKECTL drive not found. Is the Pico connected?")
             return
 
         name = simpledialog.askstring("Save Profile", "Profile name:", parent=self)
@@ -1493,25 +1656,35 @@ class BrakeCalibrator(tk.Tk):
             messagebox.showerror("Error", f"Could not delete profile:\n{e}")
 
     def _save_calibration(self):
-        """Write calibration.json to the CIRCUITPY drive."""
-        if not self.circuitpy_drive:
-            messagebox.showerror(
-                "Error", "CIRCUITPY drive not found. Is the Pico connected?"
-            )
-            return
+        """Send calibration to the Pico via serial CAL command.
 
+        The firmware applies the calibration immediately and writes it
+        to its own FatFS for persistence. No reboot needed.
+        Runs in a background thread to avoid freezing the GUI.
+        """
         cal = self._build_cal_dict()
+        self.save_btn.config(state=tk.DISABLED, text="Saving...")
+        self.status_var.set("Sending calibration to Pico...")
 
-        filepath = os.path.join(self.circuitpy_drive, "calibration.json")
-        try:
-            with open(filepath, "w") as f:
-                json.dump(cal, f, indent=2)
-            messagebox.showinfo(
-                "Saved",
-                f"Calibration saved to {filepath}\n\nPress RESET on Pico or reconnect.",
-            )
-        except OSError as e:
-            messagebox.showerror("Error", f"Could not write to CIRCUITPY:\n{e}")
+        def do_save():
+            ok, msg = send_calibration_via_serial(cal)
+
+            def on_done():
+                if ok:
+                    messagebox.showinfo("Saved", f"Calibration applied to Pico.\n{msg}")
+                else:
+                    messagebox.showerror(
+                        "Error",
+                        f"Could not send calibration via serial:\n{msg}\n\n"
+                        "Make sure the Pico is connected via USB.\n"
+                        "Install pyserial: pip install pyserial",
+                    )
+                self.save_btn.config(state=tk.NORMAL, text="Save to Pico")
+                self._update_status()
+
+            self.after(0, on_done)
+
+        threading.Thread(target=do_save, daemon=True).start()
 
     def _draw_graph(self):
         """Draw the live pressure graph on the canvas — raw and processed lines."""
@@ -1538,7 +1711,7 @@ class BrakeCalibrator(tk.Tk):
         self.canvas.create_text(
             legend_x + 24,
             legend_y,
-            text="Raw ADC",
+            text="Raw Input",
             fill="#4488ff",
             anchor=tk.W,
             font=("Consolas", 9),
@@ -1549,12 +1722,12 @@ class BrakeCalibrator(tk.Tk):
         self.canvas.create_text(
             legend_x + 24,
             legend_y,
-            text="Preview",
+            text="Calibrated Input",
             fill="#44ff44",
             anchor=tk.W,
             font=("Consolas", 9),
         )
-        legend_x += 85
+        legend_x += 145
         
         self.canvas.create_line(legend_x, legend_y, legend_x + 20, legend_y, fill="#ff4444", width=2)
         self.canvas.create_text(
@@ -1590,9 +1763,9 @@ class BrakeCalibrator(tk.Tk):
                 coords.extend([x, y])
             self.canvas.create_line(*coords, fill=color, width=width, smooth=True)
 
-        # Raw ADC line (blue)
+        # Raw Input line (blue)
         draw_line(self.raw_history, "#4488ff", 2)
-        # Preview line (green) — local processing with slider settings
+        # Calibrated Input line (green) — local processing with slider settings
         draw_line(self.preview_history, "#44ff44", 2)
         # Processed brake line (red) — actual Pico output, drawn on top
         draw_line(self.brake_history, "#ff4444", 2)
@@ -1652,9 +1825,9 @@ class BrakeCalibrator(tk.Tk):
 
         # Update brake labels
         if raw_val_int is not None:
-            self.raw_label.config(text=f"Raw ADC: {raw_val_int}")
+            self.raw_label.config(text=f"Raw Input: {raw_val_int}")
         else:
-            self.raw_label.config(text="Raw ADC: --")
+            self.raw_label.config(text="Raw Input: --")
 
         if brake_val is not None:
             self.norm_label.config(text=f"Brake: {brake_val:.1%}")

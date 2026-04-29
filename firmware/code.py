@@ -39,6 +39,7 @@ Hardware:
 import analogio
 import board
 import json
+import microcontroller
 import struct
 import time
 import usb_hid
@@ -425,6 +426,14 @@ while True:
         gamepad_device.send_report(report)
     except OSError:
         pass  # Retry next loop
+
+    # ── CHECK FOR HOST COMMANDS (Output Report) ──
+    # If the GUI sends 0xDE 0xAD ..., reboot the Pico to reload calibration.json
+    if gamepad_device.last_received_report is not None:
+        cmd = gamepad_device.last_received_report
+        if len(cmd) >= 2 and cmd[0] == 0xDE and cmd[1] == 0xAD:
+            led.value = False
+            microcontroller.reset()
 
     # Sleep to maintain loop rate
     elapsed = time.monotonic() - loop_start
