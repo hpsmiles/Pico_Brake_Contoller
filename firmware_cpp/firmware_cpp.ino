@@ -1,7 +1,8 @@
 // firmware_cpp/firmware_cpp.ino
 // Pico Brake Controller — C++ firmware (Arduino-Pico)
 // Dual-core: Core 0 = USB HID, Core 1 = ADC + signal processing
-// LittleFS + SingleFileDrive for calibration.json USB access
+// FatFS + FatFSUSB for calibration.json USB access
+// Serial calibration: GUI sends "CAL <json>\n" over Serial to apply immediately
 
 #include "config.h"
 #include "adc_reader.h"
@@ -14,8 +15,9 @@
 #include <tusb-hid.h>
 #include "class/hid/hid_device.h"
 #include <Adafruit_NeoPixel.h>
-#include <LittleFS.h>
-#include <SingleFileDrive.h>
+#include <FatFS.h>
+#include <FatFSUSB.h>
+#include <ArduinoJson.h>
 
 int usb_hid_poll_interval = 1;  // 1ms = 1000Hz USB HID polling
 
@@ -34,6 +36,9 @@ float brake_ema = 0.0f;
 bool brake_ema_init = false;
 float throttle_ema = 0.0f;
 bool throttle_ema_init = false;
+
+// Serial input buffer for CAL command (JSON can be large)
+static String serial_buf;
 
 // --- LED helpers ---
 
@@ -60,20 +65,22 @@ void setup() {
     pixel.begin();
     pixel.setBrightness(50);
 
+    Serial.begin(115200);
+
     set_rgb(255, 50, 0);   // Orange = booting
     digitalWrite(PIN_LED, HIGH);
 
-    // Step 1: Initialize filesystem (MUST happen before USB.connect and before setup1)
-    bool fs_ok = msc_disk_init();
+    // Step 1: Mount FatFS and load calibration (before any USB connect)
+    bool fs_ok = msc_disk_mount();
     if (fs_ok) {
-        // Step 2: Load calibration from LittleFS
         cal = load_calibration();
-        // Check if calibration is non-default
         cal_loaded = !(cal.brake.raw_min == 2000 && cal.brake.raw_max == 56000 &&
                        cal.throttle.raw_min == 2000 && cal.throttle.raw_max == 56000);
     }
 
-    // Step 3: Register custom HID gamepad
+    // Step 2: Register HID gamepad BEFORE FatFSUSB.begin() so both interfaces
+    // are in the USB descriptor when the first USB.connect() happens.
+    // USB is not connected yet, so disconnect() is a no-op.
     USB.disconnect();
     hid_id = USB.registerHIDDevice(
         GAMEPAD_HID_DESCRIPTOR,
@@ -82,8 +89,9 @@ void setup() {
         0x0004
     );
 
-    // Step 4: Connect USB (HID gamepad + MSC drive both enumerate)
-    USB.connect();
+    // Step 3: Start FatFSUSB — internally does USB.disconnect() (no-op, not connected)
+    // → register MSC interface → USB.connect() (builds descriptor with HID + MSC + Serial)
+    msc_disk_init();
 
     // LED status
     if (hid_id == 0) {
@@ -109,6 +117,50 @@ void setup() {
 }
 
 void loop() {
+    // Process serial input for CAL and REBOOT commands
+    while (Serial.available()) {
+        char c = Serial.read();
+        if (c == '\n') {
+            serial_buf.trim();
+            if (serial_buf.startsWith("CAL ")) {
+                // CAL <json> — parse and apply calibration immediately
+                const char* json_str = serial_buf.c_str() + 4;
+                Calibration new_cal;
+                if (parse_calibration_json(json_str, new_cal)) {
+                    // Save to FatFS for persistence across reboots
+                    bool saved = save_calibration(new_cal);
+                    // Apply immediately (Core 1 reads cal on each loop)
+                    cal = new_cal;
+                    // Reset EMA state so new calibration takes effect immediately
+                    brake_ema_init = false;
+                    throttle_ema_init = false;
+                    // Visual confirmation
+                    set_rgb(0, 255, 0);
+                    delay(50);
+                    set_rgb(0, 0, 0);
+                    Serial.println(saved ? "CAL OK" : "CAL OK (save failed)");
+                } else {
+                    Serial.println("CAL ERR");
+                }
+            } else if (serial_buf == "REBOOT") {
+                Serial.println("OK");
+                Serial.flush();
+                // Flush FatFSUSB sector cache and sync FAT before reboot.
+                FatFSUSB.unplug();
+                delay(100);
+                watchdog_reboot(0, 0, 50);
+                // Does not return
+            }
+            serial_buf = "";
+        } else if (c != '\r') {
+            serial_buf += c;
+            // Guard against absurdly long input
+            if (serial_buf.length() > 2048) {
+                serial_buf = "";
+            }
+        }
+    }
+
     if (g_sensor_ready) {
         __sync_synchronize();
         SensorData local;

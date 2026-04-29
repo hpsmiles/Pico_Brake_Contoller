@@ -1,7 +1,8 @@
 // firmware_cpp/calibration.cpp
 #include "calibration.h"
+#include "msc_disk.h"
 #include <ArduinoJson.h>
-#include <LittleFS.h>
+#include <FatFS.h>
 
 // Helper: load a ChannelCal from a JSON object
 static void load_channel_cal(JsonObjectConst obj, ChannelCal& cal, const char* prefix) {
@@ -64,7 +65,7 @@ static void load_channel_cal(JsonObjectConst obj, ChannelCal& cal, const char* p
 Calibration load_calibration() {
     Calibration cal;  // Starts with all defaults from config.h
 
-    File f = LittleFS.open("/calibration.json", "r");
+    File f = FatFS.open("/calibration.json", "r");
     if (!f) {
         return cal;  // File not found -- return defaults
     }
@@ -95,4 +96,104 @@ Calibration load_calibration() {
     load_channel_cal(obj, cal.throttle, "throttle_");
 
     return cal;
+}
+
+bool parse_calibration_json(const char* json_str, Calibration& cal) {
+    cal = Calibration();  // Start with defaults
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json_str);
+    if (err) {
+        return false;
+    }
+
+    JsonObjectConst obj = doc.as<JsonObjectConst>();
+
+    if (obj["oversample"].is<uint8_t>()) cal.oversample = obj["oversample"].as<uint8_t>();
+    if (obj["throttle_enabled"].is<bool>()) cal.throttle_enabled = obj["throttle_enabled"].as<bool>();
+    if (obj["throttle_sensor"].is<const char*>()) {
+        const char* sensor = obj["throttle_sensor"].as<const char*>();
+        strncpy(cal.throttle_sensor, sensor, sizeof(cal.throttle_sensor) - 1);
+        cal.throttle_sensor[sizeof(cal.throttle_sensor) - 1] = '\0';
+    }
+
+    load_channel_cal(obj, cal.brake, "");
+    load_channel_cal(obj, cal.throttle, "throttle_");
+
+    return true;
+}
+
+// Helper: write a ChannelCal to a JSON object
+static void save_channel_cal(JsonObject obj, const ChannelCal& cal, const char* prefix) {
+    char key[32];
+
+    snprintf(key, sizeof(key), "%sraw_min", prefix);
+    obj[key] = cal.raw_min;
+
+    snprintf(key, sizeof(key), "%sraw_max", prefix);
+    obj[key] = cal.raw_max;
+
+    snprintf(key, sizeof(key), "%sdeadzone", prefix);
+    obj[key] = cal.deadzone;
+
+    snprintf(key, sizeof(key), "%scurve", prefix);
+    obj[key] = cal.curve;
+
+    snprintf(key, sizeof(key), "%sprogressive_power", prefix);
+    obj[key] = cal.progressive_power;
+
+    snprintf(key, sizeof(key), "%saggressive_power", prefix);
+    obj[key] = cal.aggressive_power;
+
+    snprintf(key, sizeof(key), "%ssmoothing", prefix);
+    obj[key] = cal.smoothing;
+
+    snprintf(key, sizeof(key), "%sinvert", prefix);
+    obj[key] = cal.invert;
+
+    snprintf(key, sizeof(key), "%ssaturation", prefix);
+    obj[key] = cal.saturation;
+
+    snprintf(key, sizeof(key), "%sbite_point", prefix);
+    obj[key] = cal.bite_point;
+
+    // Custom curve points
+    snprintf(key, sizeof(key), "%scurve_points", prefix);
+    JsonArray points = obj[key].to<JsonArray>();
+    for (uint8_t i = 0; i < cal.num_curve_points; i++) {
+        JsonArray pt = points.add<JsonArray>();
+        pt.add(cal.curve_points_input[i]);
+        pt.add(cal.curve_points_output[i]);
+    }
+}
+
+bool save_calibration(const Calibration& cal) {
+    // Must not access FatFS while PC has the drive mounted
+    if (msc_disk_is_pc_connected()) {
+        return false;
+    }
+
+    // Ensure FatFS is mounted
+    if (!msc_disk_begin_fs()) {
+        return false;
+    }
+
+    JsonDocument doc;
+    JsonObject obj = doc.to<JsonObject>();
+
+    obj["oversample"] = cal.oversample;
+    obj["throttle_enabled"] = cal.throttle_enabled;
+    obj["throttle_sensor"] = cal.throttle_sensor;
+
+    save_channel_cal(obj, cal.brake, "");
+    save_channel_cal(obj, cal.throttle, "throttle_");
+
+    File f = FatFS.open("/calibration.json", "w");
+    if (!f) {
+        return false;
+    }
+
+    serializeJson(doc, f);
+    f.close();
+    return true;
 }
