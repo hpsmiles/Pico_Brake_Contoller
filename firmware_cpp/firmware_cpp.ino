@@ -1,252 +1,171 @@
-// firmware_cpp/firmware_cpp.ino
-// Pico Brake Controller — C++ firmware (Arduino-Pico)
-// Dual-core: Core 0 = USB HID, Core 1 = ADC + signal processing
-// FatFS + FatFSUSB for calibration.json USB access
-// Serial calibration: GUI sends "CAL <json>\n" over Serial to apply immediately
+#include <Arduino.h>
+#include <Adafruit_TinyUSB.h>
+#include <hardware/watchdog.h>
+#include <pico/bootrom.h>
 
 #include "config.h"
 #include "adc_reader.h"
 #include "hx711_driver.h"
 #include "signal_processing.h"
-#include "calibration.h"
-#include "msc_disk.h"
-#include <USB.h>
-#include <tusb.h>
-#include <tusb-hid.h>
-#include "class/hid/hid_device.h"
-#include <Adafruit_NeoPixel.h>
-#include <FatFS.h>
-#include <FatFSUSB.h>
-#include <ArduinoJson.h>
+#include "flash_storage.h"
+#include "serial_commands.h"
+#include "rgb_led.h"
 
-int usb_hid_poll_interval = 1;  // 1ms = 1000Hz USB HID polling
-
-uint8_t hid_id = 0;
+// === Shared state ===
 Calibration cal;
-ThrottleSensor throttle_sensor = ThrottleSensor::NONE;
-HX711Driver* hx711 = nullptr;
-bool cal_loaded = false;
+volatile SensorData sensor_data = {};
 
-Adafruit_NeoPixel pixel(1, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+// HX711 detected by probe in setup1(); can be overridden by cal.throttle_sensor.
+bool hx711_detected = false;
 
-volatile SensorData g_sensor = {};
-volatile bool g_sensor_ready = false;
+// Per-channel EMA state (owned by Core 1, reset by Core 0 via flag).
+float brake_ema_state    = 0.0f;
+float throttle_ema_state = 0.0f;
+bool  brake_ema_init     = false;
+bool  throttle_ema_init  = false;
 
-float brake_ema = 0.0f;
-bool brake_ema_init = false;
-float throttle_ema = 0.0f;
-bool throttle_ema_init = false;
+// Serial line accumulator.
+String serial_buffer = "";
 
-// Serial input buffer for CAL command (JSON can be large)
-static String serial_buf;
+// Set by REBOOT command; Core 0 triggers watchdog reboot on next tick.
+bool reboot_requested = false;
 
-// --- LED helpers ---
+// Flash init result — read by STATUS command.
+bool fs_ok  = false;
+bool cal_ok = false;
 
-void blink_led(uint8_t count, uint16_t on_ms = 200, uint16_t off_ms = 200) {
-    for (uint8_t i = 0; i < count; i++) {
-        digitalWrite(PIN_LED, HIGH);
-        delay(on_ms);
-        digitalWrite(PIN_LED, LOW);
-        delay(off_ms);
-    }
-}
-
-void set_rgb(uint8_t r, uint8_t g, uint8_t b) {
-    pixel.setPixelColor(0, pixel.Color(r, g, b));
-    pixel.show();
-}
+// === USB HID ===
+// Poll interval 1ms → 1 kHz ceiling; host may poll less frequently.
+Adafruit_USBD_HID usb_hid(hid_report_descriptor, sizeof(hid_report_descriptor),
+                           HID_ITF_PROTOCOL_NONE, 1, false);
 
 // ============================================================
-// Core 0: USB HID task
+// Core 0 — USB HID send + serial command processing
 // ============================================================
 
 void setup() {
-    pinMode(PIN_LED, OUTPUT);
-    pixel.begin();
-    pixel.setBrightness(50);
-
+    // Register interfaces before USB connects.  Order matters: HID first so
+    // it lands on MI_02 after the CDC control/data pair (MI_00/MI_01).
+    usb_hid.begin();
     Serial.begin(115200);
 
-    set_rgb(255, 50, 0);   // Orange = booting
-    digitalWrite(PIN_LED, HIGH);
+    // Fixed wait — arduino-pico USB IRQ drives enumeration independently;
+    // polling TinyUSBDevice.mounted() here blocks because tud_task() is not
+    // called until after setup() returns on this port.
+    delay(1500);
 
-    // Step 1: Mount FatFS and load calibration (before any USB connect)
-    bool fs_ok = msc_disk_mount();
+    rgb_led_init();
+    rgb_led_boot();
+
+    fs_ok = flash_storage_init();
     if (fs_ok) {
-        cal = load_calibration();
-        cal_loaded = !(cal.brake.raw_min == 2000 && cal.brake.raw_max == 56000 &&
-                       cal.throttle.raw_min == 2000 && cal.throttle.raw_max == 56000);
+        cal_ok = flash_load_calibration(cal);
     }
 
-    // Step 2: Register HID gamepad BEFORE FatFSUSB.begin() so both interfaces
-    // are in the USB descriptor when the first USB.connect() happens.
-    // USB is not connected yet, so disconnect() is a no-op.
-    USB.disconnect();
-    hid_id = USB.registerHIDDevice(
-        GAMEPAD_HID_DESCRIPTOR,
-        GAMEPAD_HID_DESCRIPTOR_LEN,
-        30,
-        0x0004
-    );
-
-    // Step 3: Start FatFSUSB — internally does USB.disconnect() (no-op, not connected)
-    // → register MSC interface → USB.connect() (builds descriptor with HID + MSC + Serial)
-    msc_disk_init();
-
-    // LED status
-    if (hid_id == 0) {
-        // Fatal: no HID device
-        while (true) {
-            set_rgb(255, 0, 0);  // Red
-            blink_led(10, 50, 50);  // 10 rapid blinks = fatal
-            delay(1000);
-        }
-    }
-
-    if (cal_loaded) {
-        set_rgb(0, 255, 0);   // Green = calibration loaded
-        blink_led(1, 300, 300);
+    if (cal_ok) {
+        rgb_led_cal_ok();    // green
     } else {
-        set_rgb(255, 0, 0);   // Red = defaults (no calibration or file not found)
-        blink_led(3, 200, 200);
+        rgb_led_defaults();  // red = factory defaults
     }
-
-    // Running — LEDs off
-    set_rgb(0, 0, 0);
-    digitalWrite(PIN_LED, LOW);
 }
 
 void loop() {
-    // Process serial input for CAL and REBOOT commands
+    // --- Serial command processing ---
     while (Serial.available()) {
         char c = Serial.read();
         if (c == '\n') {
-            serial_buf.trim();
-            if (serial_buf.startsWith("CAL ")) {
-                // CAL <json> — parse and apply calibration immediately
-                const char* json_str = serial_buf.c_str() + 4;
-                Calibration new_cal;
-                if (parse_calibration_json(json_str, new_cal)) {
-                    // Save to FatFS for persistence across reboots
-                    bool saved = save_calibration(new_cal);
-                    // Apply immediately (Core 1 reads cal on each loop)
-                    cal = new_cal;
-                    // Reset EMA state so new calibration takes effect immediately
-                    brake_ema_init = false;
-                    throttle_ema_init = false;
-                    // Visual confirmation
-                    set_rgb(0, 255, 0);
-                    delay(50);
-                    set_rgb(0, 0, 0);
-                    Serial.println(saved ? "CAL OK" : "CAL OK (save failed)");
-                } else {
-                    Serial.println("CAL ERR");
-                }
-            } else if (serial_buf == "REBOOT") {
-                Serial.println("OK");
-                Serial.flush();
-                // Flush FatFSUSB sector cache and sync FAT before reboot.
-                FatFSUSB.unplug();
-                delay(100);
-                watchdog_reboot(0, 0, 50);
-                // Does not return
-            }
-            serial_buf = "";
+            serial_process_command(serial_buffer, cal, reboot_requested,
+                                   brake_ema_init, throttle_ema_init,
+                                   fs_ok, cal_ok);
+            serial_buffer = "";
         } else if (c != '\r') {
-            serial_buf += c;
-            // Guard against absurdly long input
-            if (serial_buf.length() > 2048) {
-                serial_buf = "";
-            }
+            serial_buffer += c;
         }
     }
 
-    if (g_sensor_ready) {
-        __sync_synchronize();
-        SensorData local;
-        memcpy(&local, (const void*)&g_sensor, sizeof(SensorData));
-
-        BrakeReport report;
-        report.x  = local.brake_processed;
-        report.y  = local.brake_raw;
-        report.z  = local.throttle_processed;
-        report.rz = local.throttle_raw;
-
-        CoreMutex m(&USB.mutex);
-        tud_task();
-        if (USB.HIDReady()) {
-            tud_hid_n_report(0, USB.findHIDReportID(hid_id), &report, sizeof(report));
-        }
-        tud_task();
-
-        g_sensor_ready = false;
+    // --- Reboot ---
+    if (reboot_requested) {
+        delay(50);
+        watchdog_reboot(0, 0, 50);
+        while (true) {}
     }
 
-    delayMicroseconds(500);  // ~2kHz main loop, HID sends at USB poll rate (1ms)
+    // --- Read sensor snapshot from Core 1 ---
+    SensorData snap;
+    __sync_synchronize();
+    memcpy(&snap, (const void*)&sensor_data, sizeof(SensorData));
+
+    // --- HID report: X=brake_proc, Y=brake_raw, Z=throttle_proc, Rz=throttle_raw ---
+    uint8_t report[8];
+    report[0] = snap.brake_processed & 0xFF;
+    report[1] = (snap.brake_processed >> 8) & 0xFF;
+    report[2] = snap.brake_raw & 0xFF;
+    report[3] = (snap.brake_raw >> 8) & 0xFF;
+    report[4] = snap.throttle_processed & 0xFF;
+    report[5] = (snap.throttle_processed >> 8) & 0xFF;
+    report[6] = snap.throttle_raw & 0xFF;
+    report[7] = (snap.throttle_raw >> 8) & 0xFF;
+
+    if (usb_hid.ready()) {
+        usb_hid.sendReport(0, report, sizeof(report));
+    }
+
+    delay(1);  // 1 kHz loop rate
 }
 
 // ============================================================
-// Core 1: ADC reading + signal processing
+// Core 1 — ADC read + signal processing
 // ============================================================
 
 void setup1() {
     adc_reader_init();
 
-    if (cal.throttle_enabled) {
-        if (strcmp(cal.throttle_sensor, "auto") == 0) {
-            // Probe for HX711 on GP16+GP28
-            HX711Driver probe_hx(PIN_HX711_DATA, PIN_HX711_SCK);
-            if (probe_hx.probe(120)) {
-                throttle_sensor = ThrottleSensor::LOAD_CELL;
-                hx711 = new HX711Driver(PIN_HX711_DATA, PIN_HX711_SCK);
-                hx711->init();
-                blink_led(2, 100, 200);  // 2 blinks = load cell
-            } else {
-                throttle_sensor = ThrottleSensor::HALL;
-                blink_led(1, 100, 100);  // 1 blink = Hall
-            }
-        } else if (strcmp(cal.throttle_sensor, "load_cell") == 0) {
-            throttle_sensor = ThrottleSensor::LOAD_CELL;
-            hx711 = new HX711Driver(PIN_HX711_DATA, PIN_HX711_SCK);
-            hx711->init();
-        } else {
-            throttle_sensor = ThrottleSensor::HALL;
-        }
+    // Always configure HX711 GPIO so the cal.throttle_sensor override works.
+    pinMode(PIN_HX711_SCK, OUTPUT);
+    digitalWrite(PIN_HX711_SCK, LOW);
+    pinMode(PIN_HX711_DATA, INPUT);
+
+    hx711_detected = hx711_probe(PIN_HX711_DATA);
+
+    if (hx711_detected) {
+        rgb_led_blink_code(BLINK_HX711, 0, 255, 0);  // 2 green blinks
     } else {
-        throttle_sensor = ThrottleSensor::NONE;
+        rgb_led_blink_code(BLINK_HALL,  0, 255, 0);  // 1 green blink
     }
 }
 
 void loop1() {
-    // Brake: always read
-    uint16_t brake_raw = adc_read_oversampled(0, cal.oversample);
+    // --- Brake: always ADC ---
+    uint16_t brake_raw       = adc_read_oversampled(PIN_BRAKE_ADC, cal.oversample);
     uint16_t brake_processed = process_channel(brake_raw, cal.brake,
-                                               brake_ema, brake_ema_init);
+                                               brake_ema_state, brake_ema_init);
 
-    // Throttle: only if enabled
-    uint16_t throttle_raw = 0;
+    // --- Throttle ---
+    uint16_t throttle_raw       = 0;
     uint16_t throttle_processed = 0;
 
-    if (throttle_sensor == ThrottleSensor::HALL) {
-        throttle_raw = adc_read_oversampled(1, cal.oversample);
+    if (cal.throttle_enabled) {
+        // Resolve sensor: explicit override beats auto-detect.
+        bool use_hx711;
+        if (strcmp(cal.throttle_sensor, "hx711") == 0) {
+            use_hx711 = true;
+        } else if (strcmp(cal.throttle_sensor, "hall") == 0) {
+            use_hx711 = false;
+        } else {
+            use_hx711 = hx711_detected;  // "auto"
+        }
+
+        if (use_hx711) {
+            throttle_raw = hx711_read_16bit(PIN_HX711_SCK, PIN_HX711_DATA);
+        } else {
+            throttle_raw = adc_read_oversampled(PIN_THROTTLE_ADC, cal.oversample);
+        }
         throttle_processed = process_channel(throttle_raw, cal.throttle,
-                                             throttle_ema, throttle_ema_init);
-    } else if (throttle_sensor == ThrottleSensor::LOAD_CELL && hx711 != nullptr) {
-        throttle_raw = hx711->read_u16();
-        throttle_processed = process_channel(throttle_raw, cal.throttle,
-                                             throttle_ema, throttle_ema_init);
+                                             throttle_ema_state, throttle_ema_init);
     }
 
-    // Publish to shared struct (Core 0 reads this)
-    SensorData sd;
-    sd.brake_raw          = brake_raw;
-    sd.brake_processed    = brake_processed;
-    sd.throttle_raw       = throttle_raw;
-    sd.throttle_processed = throttle_processed;
-
+    // --- Publish to Core 0 ---
+    SensorData next = { brake_raw, brake_processed, throttle_raw, throttle_processed };
     __sync_synchronize();
-    memcpy((void*)&g_sensor, &sd, sizeof(SensorData));
-    g_sensor_ready = true;
-
-    delayMicroseconds(500);  // ~2kHz ADC read rate
+    memcpy((void*)&sensor_data, &next, sizeof(SensorData));
 }

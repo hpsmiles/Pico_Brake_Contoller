@@ -144,9 +144,9 @@ def reset_pico_via_serial():
         return False
 
     try:
-        # Find Pico serial port by USB VID (0x2E8A = Raspberry Pi)
+        # Find Pico serial port by USB VID/PID
         for port in serial.tools.list_ports.comports():
-            if port.vid == 0x2E8A:
+            if port.vid in (0x2E8A, 0x239A):
                 try:
                     import serial
                     ser = serial.Serial(port.device, baudrate=115200, timeout=2)
@@ -180,11 +180,13 @@ def find_pico_serial_port():
     try:
         fallback = None
         for port in serial.tools.list_ports.comports():
-            if port.vid == 0x2E8A:
-                if port.pid == 0x000E:
-                    return port.device  # Our firmware — prefer this
+            # 0x239A = Adafruit (TinyUSB / arduino-pico), PID 0xCAFE = our firmware
+            # 0x2E8A = Raspberry Pi Foundation (CircuitPython / MicroPython)
+            if port.vid == 0x239A and port.pid == 0xCAFE:
+                return port.device  # Our firmware — exact match
+            if port.vid in (0x2E8A, 0x239A):
                 fallback = port.device
-        return fallback  # Any Pico if no exact PID match
+        return fallback
     except Exception:
         pass
     return None

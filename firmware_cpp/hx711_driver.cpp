@@ -1,104 +1,56 @@
-// firmware_cpp/hx711_driver.cpp
 #include "hx711_driver.h"
 #include <Arduino.h>
 
-HX711Driver::HX711Driver(uint8_t data_pin, uint8_t sck_pin)
-    : _data_pin(data_pin), _sck_pin(sck_pin) {}
-
-void HX711Driver::init() {
-    pinMode(_sck_pin, OUTPUT);
-    digitalWrite(_sck_pin, LOW);
-
-    pinMode(_data_pin, INPUT_PULLUP);
-    _initialized = true;
+bool hx711_probe(uint8_t pin_data) {
+    pinMode(pin_data, INPUT_PULLUP);
+    delayMicroseconds(10);
+    // HX711 drives DATA low when a conversion is ready.
+    // If it stays high for 500us, no HX711 is present.
+    for (int i = 0; i < 50; i++) {
+        if (digitalRead(pin_data) == LOW) return true;
+        delayMicroseconds(10);
+    }
+    return false;
 }
 
-bool HX711Driver::probe(uint32_t timeout_ms) {
-    init();  // Ensure pins are configured
-
-    // HX711 pulls DATA LOW when data is ready
-    // Wait up to timeout_ms for DATA to go LOW
-    uint32_t deadline = millis() + timeout_ms;
-    while (millis() < deadline) {
-        if (digitalRead(_data_pin) == LOW) {
-            // HX711 is present -- clean up by completing a read cycle and powering down
-            // Pulse SCK 27 times (25 completes read + 1 sets gain + 1 extra = power down)
-            for (int i = 0; i < 27; i++) {
-                digitalWrite(_sck_pin, HIGH);
-                delayMicroseconds(1);
-                digitalWrite(_sck_pin, LOW);
-                delayMicroseconds(1);
-            }
-            return true;
-        }
-        delay(10);
-    }
-    return false;  // No HX711 detected
-}
-
-int32_t HX711Driver::read(uint8_t gain_pulses) {
-    if (!_initialized) init();
-
-    // Wait for DATA to go LOW (data ready)
-    uint32_t timeout = millis() + 500;
-    while (digitalRead(_data_pin) == HIGH) {
-        if (millis() > timeout) return 0;  // Timeout
-        tight_loop_contents();
+int32_t hx711_read_raw(uint8_t pin_sck, uint8_t pin_data, bool channel_A) {
+    // Wait for DATA → LOW (conversion ready), 100ms timeout.
+    unsigned long deadline = millis() + 100;
+    while (digitalRead(pin_data) == HIGH) {
+        if (millis() > deadline) return 0;
     }
 
-    uint32_t value = 0;
-
-    // Disable interrupts during shift to prevent data corruption
-    uint32_t irq_state = save_and_disable_interrupts();
-
-    // Shift in 24 bits MSB first
+    // Clock out 24 bits, MSB first.
+    int32_t value = 0;
     for (int i = 0; i < 24; i++) {
-        digitalWrite(_sck_pin, HIGH);
+        digitalWrite(pin_sck, HIGH);
         delayMicroseconds(1);
-        value <<= 1;
-        if (digitalRead(_data_pin)) {
-            value |= 1;
-        }
-        digitalWrite(_sck_pin, LOW);
+        value = (value << 1) | digitalRead(pin_data);
+        digitalWrite(pin_sck, LOW);
         delayMicroseconds(1);
     }
 
-    // Extra clock pulses to set gain/channel for next reading
-    for (int i = 0; i < gain_pulses; i++) {
-        digitalWrite(_sck_pin, HIGH);
+    // Extra clock pulses set channel/gain for the NEXT conversion:
+    //   1 pulse → Channel A, gain 128
+    //   2 pulses → Channel B, gain 32
+    //   3 pulses → Channel A, gain 64
+    int pulses = channel_A ? 1 : 2;
+    for (int i = 0; i < pulses; i++) {
+        digitalWrite(pin_sck, HIGH);
         delayMicroseconds(1);
-        digitalWrite(_sck_pin, LOW);
+        digitalWrite(pin_sck, LOW);
         delayMicroseconds(1);
     }
 
-    restore_interrupts(irq_state);
+    // Sign-extend 24-bit two's complement → int32.
+    if (value & 0x800000) value |= (int32_t)0xFF000000;
 
-    // Convert 24-bit two's complement to int32_t
-    if (value & 0x800000) {
-        value |= 0xFF000000;  // Sign extend
-    }
-
-    return (int32_t)value;
+    return value;
 }
 
-uint16_t HX711Driver::read_u16(uint8_t gain_pulses) {
-    int32_t raw = read(gain_pulses);
-
-    // Match CircuitPython's mapping: clamp negative to 0, shift right by 8
+uint16_t hx711_read_16bit(uint8_t pin_sck, uint8_t pin_data) {
+    int32_t raw = hx711_read_raw(pin_sck, pin_data, true);
     if (raw < 0) raw = 0;
-    uint32_t shifted = (uint32_t)raw >> 8;
-
-    // Clamp to 16-bit range
-    if (shifted > 65535) shifted = 65535;
-    return (uint16_t)shifted;
-}
-
-void HX711Driver::power_down() {
-    digitalWrite(_sck_pin, HIGH);
-    delayMicroseconds(64);
-}
-
-void HX711Driver::power_up(uint8_t gain_pulses) {
-    digitalWrite(_sck_pin, LOW);
-    read(gain_pulses);  // First read after power-up sets gain
+    // Top 16 bits of 24-bit range → 0–65535.
+    return (uint16_t)(raw >> 8);
 }
