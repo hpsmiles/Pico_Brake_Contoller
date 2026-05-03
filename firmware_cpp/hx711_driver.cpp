@@ -20,14 +20,21 @@ int32_t hx711_read_raw(uint8_t pin_sck, uint8_t pin_data, bool channel_A) {
         if (millis() > deadline) return 0;
     }
 
+    // Disable interrupts during bit-bang clock-out to prevent timing jitter
+    // from Core 0 USB/serial interrupts corrupting HX711 reads on Core 1.
+    // The 24+1 clock pulses take ~100us; USB endpoints tolerate brief IRQ blocks.
+    uint32_t irq_save = save_and_disable_interrupts();
+
     // Clock out 24 bits, MSB first.
+    // HX711 datasheet: data valid on rising edge of SCK.
+    // Use 2us delays for reliable timing on RP2040.
     int32_t value = 0;
     for (int i = 0; i < 24; i++) {
         digitalWrite(pin_sck, HIGH);
-        delayMicroseconds(1);
+        delayMicroseconds(2);
         value = (value << 1) | digitalRead(pin_data);
         digitalWrite(pin_sck, LOW);
-        delayMicroseconds(1);
+        delayMicroseconds(2);
     }
 
     // Extra clock pulses set channel/gain for the NEXT conversion:
@@ -37,10 +44,13 @@ int32_t hx711_read_raw(uint8_t pin_sck, uint8_t pin_data, bool channel_A) {
     int pulses = channel_A ? 1 : 2;
     for (int i = 0; i < pulses; i++) {
         digitalWrite(pin_sck, HIGH);
-        delayMicroseconds(1);
+        delayMicroseconds(2);
         digitalWrite(pin_sck, LOW);
-        delayMicroseconds(1);
+        delayMicroseconds(2);
     }
+
+    // Re-enable interrupts as soon as critical timing section is done.
+    restore_interrupts(irq_save);
 
     // Sign-extend 24-bit two's complement → int32.
     if (value & 0x800000) value |= (int32_t)0xFF000000;
@@ -50,7 +60,9 @@ int32_t hx711_read_raw(uint8_t pin_sck, uint8_t pin_data, bool channel_A) {
 
 uint16_t hx711_read_16bit(uint8_t pin_sck, uint8_t pin_data) {
     int32_t raw = hx711_read_raw(pin_sck, pin_data, true);
-    if (raw < 0) raw = 0;
-    // Top 16 bits of 24-bit range → 0–65535.
-    return (uint16_t)(raw >> 8);
+    // HX711 returns 24-bit two's complement. Offset to unsigned and shift
+    // right by 8 to map the full 24-bit range into 16 bits.
+    // The calibration system normalizes the actual signal range via raw_min/raw_max.
+    uint32_t unsigned_raw = ((uint32_t)raw) + 0x800000u;
+    return (uint16_t)(unsigned_raw >> 8);
 }

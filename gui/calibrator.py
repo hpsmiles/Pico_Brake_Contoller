@@ -472,29 +472,45 @@ class BrakeCalibrator(tk.Tk):
         main = ttk.Frame(self, padding=10)
         main.pack(fill=tk.BOTH, expand=True)
 
-        # Left panel — live pressure graph
-        self.left_frame = ttk.LabelFrame(main, text="Live Brake Pressure", padding=5)
-        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        # Left panel — container for brake and throttle graphs
+        self.graphs_frame = ttk.Frame(main)
+        self.graphs_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
 
-        self.canvas = tk.Canvas(self.left_frame, bg="black", width=300, height=400)
+        # Brake graph panel
+        self.brake_frame = ttk.LabelFrame(self.graphs_frame, text="Live Brake Pressure", padding=5)
+        self.brake_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 2))
+
+        self.canvas = tk.Canvas(self.brake_frame, bg="black", width=300, height=200)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # Raw/normalized value labels below graph
-        info_frame = ttk.Frame(self.left_frame)
-        info_frame.pack(fill=tk.X, pady=(5, 0))
+        # Brake info labels
+        brake_info = ttk.Frame(self.brake_frame)
+        brake_info.pack(fill=tk.X, pady=(5, 0))
 
-        self.raw_label = ttk.Label(info_frame, text="Raw Input: --")
+        self.raw_label = ttk.Label(brake_info, text="Raw Input: --")
         self.raw_label.pack(side=tk.LEFT, padx=5)
 
-        self.norm_label = ttk.Label(info_frame, text="Brake: --")
+        self.norm_label = ttk.Label(brake_info, text="Brake: --")
         self.norm_label.pack(side=tk.LEFT, padx=5)
 
-        # Throttle labels (initially hidden)
-        self.throttle_raw_label = ttk.Label(info_frame, text="Throttle Raw: --")
-        self.throttle_norm_label = ttk.Label(info_frame, text="Throttle: --")
+        # Throttle graph panel (initially hidden)
+        self.throttle_frame_graph = ttk.LabelFrame(self.graphs_frame, text="Live Throttle", padding=5)
 
-        # Device selector
-        device_frame = ttk.Frame(self.left_frame)
+        self.throttle_canvas = tk.Canvas(self.throttle_frame_graph, bg="black", width=300, height=200)
+        self.throttle_canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Throttle info labels
+        throttle_info = ttk.Frame(self.throttle_frame_graph)
+        throttle_info.pack(fill=tk.X, pady=(5, 0))
+
+        self.throttle_raw_label = ttk.Label(throttle_info, text="Throttle Raw: --")
+        self.throttle_raw_label.pack(side=tk.LEFT, padx=5)
+
+        self.throttle_norm_label = ttk.Label(throttle_info, text="Throttle: --")
+        self.throttle_norm_label.pack(side=tk.LEFT, padx=5)
+
+        # Device selector (below both graphs)
+        device_frame = ttk.Frame(self.graphs_frame)
         device_frame.pack(fill=tk.X, pady=(5, 0))
 
         ttk.Label(device_frame, text="Device:").pack(side=tk.LEFT, padx=5)
@@ -847,18 +863,16 @@ class BrakeCalibrator(tk.Tk):
         """Handle throttle enable/disable toggle."""
         enabled = self.throttle_enabled_var.get()
 
-        # Show/hide throttle controls
+        # Show/hide throttle controls and graph
         if enabled:
             self.throttle_controls_frame.pack(fill=tk.X, pady=(5, 0))
-            self.throttle_raw_label.pack(side=tk.LEFT, padx=5)
-            self.throttle_norm_label.pack(side=tk.LEFT, padx=5)
-            self.left_frame.config(text="Live Data")
+            self.throttle_frame_graph.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 0))
+            self.brake_frame.config(text="Live Brake Pressure")
             self.title("Brake & Throttle Calibrator")
         else:
             self.throttle_controls_frame.pack_forget()
-            self.throttle_raw_label.pack_forget()
-            self.throttle_norm_label.pack_forget()
-            self.left_frame.config(text="Live Brake Pressure")
+            self.throttle_frame_graph.pack_forget()
+            self.brake_frame.config(text="Live Brake Pressure")
             self.title("Brake Controller Calibrator")
             # Clear throttle histories when disabled
             self.throttle_raw_history.clear()
@@ -1689,92 +1703,90 @@ class BrakeCalibrator(tk.Tk):
         threading.Thread(target=do_save, daemon=True).start()
 
     def _draw_graph(self):
-        """Draw the live pressure graph on the canvas — raw and processed lines."""
+        """Draw the live pressure graphs — brake and throttle on separate canvases."""
+        throttle_enabled = self.throttle_enabled_var.get()
+
+        # --- Brake graph ---
         self.canvas.delete("all")
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
 
-        if w < 10 or h < 10:
-            return
+        if w >= 10 and h >= 10:
+            # Grid
+            for i in range(5):
+                y = int(h * i / 4)
+                self.canvas.create_line(0, y, w, y, fill="#333333", dash=(2, 4))
 
-        throttle_enabled = self.throttle_enabled_var.get()
+            # Legend
+            lx = 8
+            ly = 12
+            self.canvas.create_line(lx, ly, lx + 20, ly, fill="#4488ff", width=2)
+            self.canvas.create_text(lx + 24, ly, text="Raw Input", fill="#4488ff", anchor=tk.W, font=("Consolas", 9))
+            lx += 90
+            self.canvas.create_line(lx, ly, lx + 20, ly, fill="#44ff44", width=2)
+            self.canvas.create_text(lx + 24, ly, text="Calibrated Input", fill="#44ff44", anchor=tk.W, font=("Consolas", 9))
+            lx += 145
+            self.canvas.create_line(lx, ly, lx + 20, ly, fill="#ff4444", width=2)
+            self.canvas.create_text(lx + 24, ly, text="Game Input", fill="#ff4444", anchor=tk.W, font=("Consolas", 9))
 
-        # Draw grid lines
-        for i in range(5):
-            y = int(h * i / 4)
-            self.canvas.create_line(0, y, w, y, fill="#333333", dash=(2, 4))
+            # Draw lines
+            def draw_line(canvas, history, color, width=2):
+                if len(history) < 2:
+                    return
+                n = len(history)
+                cw = canvas.winfo_width()
+                ch = canvas.winfo_height()
+                coords = []
+                for i, val in enumerate(history):
+                    x = int(cw * i / max(n - 1, 1))
+                    y = int(ch * (1.0 - max(0.0, min(1.0, val))))
+                    coords.extend([x, y])
+                canvas.create_line(*coords, fill=color, width=width, smooth=True)
 
-        # Draw legend
-        legend_y = 12
-        legend_x = 8
-        
-        # Brake legend items
-        self.canvas.create_line(legend_x, legend_y, legend_x + 20, legend_y, fill="#4488ff", width=2)
-        self.canvas.create_text(
-            legend_x + 24,
-            legend_y,
-            text="Raw Input",
-            fill="#4488ff",
-            anchor=tk.W,
-            font=("Consolas", 9),
-        )
-        legend_x += 90
-        
-        self.canvas.create_line(legend_x, legend_y, legend_x + 20, legend_y, fill="#44ff44", width=2)
-        self.canvas.create_text(
-            legend_x + 24,
-            legend_y,
-            text="Calibrated Input",
-            fill="#44ff44",
-            anchor=tk.W,
-            font=("Consolas", 9),
-        )
-        legend_x += 145
-        
-        self.canvas.create_line(legend_x, legend_y, legend_x + 20, legend_y, fill="#ff4444", width=2)
-        self.canvas.create_text(
-            legend_x + 24,
-            legend_y,
-            text="Game Input",
-            fill="#ff4444",
-            anchor=tk.W,
-            font=("Consolas", 9),
-        )
-        
+            draw_line(self.canvas, self.raw_history, "#4488ff", 2)
+            draw_line(self.canvas, self.preview_history, "#44ff44", 2)
+            draw_line(self.canvas, self.brake_history, "#ff4444", 2)
+
+        # --- Throttle graph ---
         if throttle_enabled:
-            legend_x += 105
-            self.canvas.create_line(legend_x, legend_y, legend_x + 20, legend_y, fill="#ff8800", width=2)
-            self.canvas.create_text(
-                legend_x + 24,
-                legend_y,
-                text="Throttle",
-                fill="#ff8800",
-                anchor=tk.W,
-                font=("Consolas", 9),
-            )
+            self.throttle_canvas.delete("all")
+            tw = self.throttle_canvas.winfo_width()
+            th = self.throttle_canvas.winfo_height()
 
-        # Draw a history line
-        def draw_line(history, color, width=2):
-            if len(history) < 2:
-                return
-            n = len(history)
-            coords = []
-            for i, val in enumerate(history):
-                x = int(w * i / max(n - 1, 1))
-                y = int(h * (1.0 - max(0.0, min(1.0, val))))
-                coords.extend([x, y])
-            self.canvas.create_line(*coords, fill=color, width=width, smooth=True)
+            if tw >= 10 and th >= 10:
+                # Grid
+                for i in range(5):
+                    y = int(th * i / 4)
+                    self.throttle_canvas.create_line(0, y, tw, y, fill="#333333", dash=(2, 4))
 
-        # Raw Input line (blue)
-        draw_line(self.raw_history, "#4488ff", 2)
-        # Calibrated Input line (green) — local processing with slider settings
-        draw_line(self.preview_history, "#44ff44", 2)
-        # Processed brake line (red) — actual Pico output, drawn on top
-        draw_line(self.brake_history, "#ff4444", 2)
-        
-        # Throttle line (orange) — only when enabled
-        if throttle_enabled:
-            draw_line(self.throttle_history, "#ff8800", 2)
+                # Legend
+                lx = 8
+                ly = 12
+                self.throttle_canvas.create_line(lx, ly, lx + 20, ly, fill="#ff8800", width=2)
+                self.throttle_canvas.create_text(lx + 24, ly, text="Raw Throttle", fill="#ff8800", anchor=tk.W, font=("Consolas", 9))
+                lx += 110
+                self.throttle_canvas.create_line(lx, ly, lx + 20, ly, fill="#44ff44", width=2)
+                self.throttle_canvas.create_text(lx + 24, ly, text="Calibrated", fill="#44ff44", anchor=tk.W, font=("Consolas", 9))
+                lx += 90
+                self.throttle_canvas.create_line(lx, ly, lx + 20, ly, fill="#ff4444", width=2)
+                self.throttle_canvas.create_text(lx + 24, ly, text="Game Input", fill="#ff4444", anchor=tk.W, font=("Consolas", 9))
+
+                def draw_line_on(canvas, history, color, width=2):
+                    if len(history) < 2:
+                        return
+                    n = len(history)
+                    cw = canvas.winfo_width()
+                    ch = canvas.winfo_height()
+                    coords = []
+                    for i, val in enumerate(history):
+                        x = int(cw * i / max(n - 1, 1))
+                        y = int(ch * (1.0 - max(0.0, min(1.0, val))))
+                        coords.extend([x, y])
+                    canvas.create_line(*coords, fill=color, width=width, smooth=True)
+
+                draw_line_on(self.throttle_canvas, self.throttle_raw_history, "#ff8800", 2)
+                draw_line_on(self.throttle_canvas, self.throttle_preview_history, "#44ff44", 2)
+                draw_line_on(self.throttle_canvas, self.throttle_history, "#ff4444", 2)
 
     def _poll_loop(self):
         """Main polling loop — runs at ~30Hz."""

@@ -129,8 +129,6 @@ void setup1() {
 
     if (hx711_detected) {
         rgb_led_blink_code(BLINK_HX711, 0, 255, 0);  // 2 green blinks
-    } else {
-        rgb_led_blink_code(BLINK_HALL,  0, 255, 0);  // 1 green blink
     }
 }
 
@@ -145,21 +143,8 @@ void loop1() {
     uint16_t throttle_processed = 0;
 
     if (cal.throttle_enabled) {
-        // Resolve sensor: explicit override beats auto-detect.
-        bool use_hx711;
-        if (strcmp(cal.throttle_sensor, "hx711") == 0) {
-            use_hx711 = true;
-        } else if (strcmp(cal.throttle_sensor, "hall") == 0) {
-            use_hx711 = false;
-        } else {
-            use_hx711 = hx711_detected;  // "auto"
-        }
-
-        if (use_hx711) {
-            throttle_raw = hx711_read_16bit(PIN_HX711_SCK, PIN_HX711_DATA);
-        } else {
-            throttle_raw = adc_read_oversampled(PIN_THROTTLE_ADC, cal.oversample);
-        }
+        // HX711 load cell only — Hall Effect sensor not used.
+        throttle_raw = hx711_read_16bit(PIN_HX711_SCK, PIN_HX711_DATA);
         throttle_processed = process_channel(throttle_raw, cal.throttle,
                                              throttle_ema_state, throttle_ema_init);
     }

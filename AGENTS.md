@@ -8,8 +8,13 @@ Sim racing pneumatic brake + throttle controller for Sim Sonn Pro pedal. RPi Pic
 
 - Run calibration GUI: `python gui/calibrator.py`
 - Build GUI exe: `.venv\Scripts\python.exe -m PyInstaller BrakeCalibrator.spec --distpath dist --workpath build_pyinstaller --noconfirm`
-- Build C++ firmware: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_1048576,usbstack=tinyusb" --build-path firmware_cpp/build firmware_cpp`
-- Flash via serial (no button): send `REBOOT BOOTSEL\n` on COM port at 115200 baud (DTR asserted), then copy .uf2 to RPI-RP2 drive
+- Build C++ firmware: `& "C:\Tools\arduino-cli\arduino-cli.exe" compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_1048576,usbstack=tinyusb" --build-path firmware_cpp/build firmware_cpp`
+- Flash via serial (no button): Find Pico COM port (VID 0x239A/PID 0xCAFE): `Get-PnpDevice -Class Ports -Status_OK | Where-Object { $_.InstanceId -match '239A' }`, then send reboot and copy UF2:
+  ```powershell
+  $port = New-Object System.IO.Ports.SerialPort COM9,115200,None,8,one; $port.DtrEnable = $true; $port.Open(); Start-Sleep -Milliseconds 100; $port.WriteLine("REBOOT BOOTSEL"); Start-Sleep -Milliseconds 500; $port.Close()
+  # Wait for RPI-RP2 drive, then:
+  Copy-Item firmware_cpp\build\firmware_cpp.ino.uf2 G:\ -Force
+  ```
 - No test suite
 
 ## Architecture
@@ -29,11 +34,11 @@ Sim racing pneumatic brake + throttle controller for Sim Sonn Pro pedal. RPi Pic
 | `signal_processing.h/.cpp` | Clamp, normalize, deadzone, bite, curve (linear/progressive/aggressive/custom), EMA, invert |
 | `flash_storage.h/.cpp` | FatFS init, calibration.json load/save, profile CRUD (`/profiles/<name>.json`) |
 | `serial_commands.h/.cpp` | Serial command parser: CAL, REBOOT, REBOOT BOOTSEL, PROFILE SAVE/LOAD/DELETE/LIST, STATUS |
-| `rgb_led.h/.cpp` | WS2812 RGB LED status (GP23): Orange=boot, Green=cal loaded, Red=defaults, blink codes |
+| `rgb_led.h/.cpp` | WS2812 RGB LED status (GP23): Orange=boot, Green=cal loaded (2s then off), Red=defaults (dim, stays on), blink codes |
 
-Build: `arduino-cli compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_1048576,usbstack=tinyusb" --build-path firmware_cpp/build firmware_cpp`
+Build: `& "C:\Tools\arduino-cli\arduino-cli.exe" compile --fqbn rp2040:rp2040:rpipico --board-options "flash=2097152_1048576,usbstack=tinyusb" --build-path firmware_cpp/build firmware_cpp`
 
-Flash: Copy `firmware_cpp/build/firmware_cpp.ino.uf2` to Pico via BOOTSEL, OR send `REBOOT BOOTSEL\n` over serial to avoid pressing the button.
+Flash: Send `REBOOT BOOTSEL\n` over serial (see Commands section above), then copy `firmware_cpp/build/firmware_cpp.ino.uf2` to the RPI-RP2 drive.
 
 USB identity: VID=0x239A (Adafruit/TinyUSB), PID=0xCAFE. Composite device: CDC serial (COM port) + HID gamepad.
 
