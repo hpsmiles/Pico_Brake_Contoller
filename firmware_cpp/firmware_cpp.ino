@@ -143,8 +143,21 @@ void loop1() {
     uint16_t throttle_processed = 0;
 
     if (cal.throttle_enabled) {
-        // HX711 load cell only — Hall Effect sensor not used.
-        throttle_raw = hx711_read_16bit(PIN_HX711_SCK, PIN_HX711_DATA);
+        bool use_hx711 = false;
+        if (strcmp(cal.throttle_sensor, "hx711") == 0) {
+            use_hx711 = true;
+        } else if (strcmp(cal.throttle_sensor, "hall") == 0) {
+            use_hx711 = false;
+        } else {
+            // "auto" — use HX711 if detected, otherwise Hall
+            use_hx711 = hx711_detected;
+        }
+
+        if (use_hx711) {
+            throttle_raw = hx711_read_16bit(PIN_HX711_SCK, PIN_HX711_DATA);
+        } else {
+            throttle_raw = adc_read_oversampled(PIN_THROTTLE_ADC, cal.oversample);
+        }
         throttle_processed = process_channel(throttle_raw, cal.throttle,
                                              throttle_ema_state, throttle_ema_init);
     }

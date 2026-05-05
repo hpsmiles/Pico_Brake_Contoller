@@ -1,6 +1,7 @@
 #ifndef FLASH_STORAGE_H
 #define FLASH_STORAGE_H
 
+#include <Arduino.h>
 #include <cstddef>
 #include <stdbool.h>
 #include "config.h"
@@ -24,5 +25,8 @@ bool flash_profile_delete(const char* name);
 // Write comma-separated profile names (without .json) into buffer.
 // Returns true always; buffer is empty string if no profiles exist.
 bool flash_profile_list(char* buffer, size_t buf_size);
+
+// Serialise calibration to JSON string.
+String cal_to_json(const Calibration& cal);
 
 #endif // FLASH_STORAGE_H

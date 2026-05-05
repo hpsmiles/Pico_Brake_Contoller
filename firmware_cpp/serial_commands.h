@@ -5,6 +5,7 @@
 #include "config.h"
 
 // Parse one complete serial line (no newline).
+// CAL?                — read back current calibration as JSON
 // CAL <json>          — apply + persist calibration, reset EMA
 // REBOOT              — set reboot_flag; caller reboots on next loop tick
 // PROFILE SAVE <name> — save current cal as named profile

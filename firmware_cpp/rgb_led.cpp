@@ -20,8 +20,8 @@ void rgb_led_off() {
 }
 
 void rgb_led_boot()     { rgb_led_set_color(255, 165,   0); }  // Orange
-void rgb_led_cal_ok()   { rgb_led_set_color(  0, 255,   0); }  // Green
-void rgb_led_defaults() { rgb_led_set_color(255,   0,   0); }  // Red
+void rgb_led_cal_ok()   { rgb_led_set_color(  0, 255,   0); delay(2000); rgb_led_off(); }  // Green 2s then off
+void rgb_led_defaults() { rgb_led_set_color( 30,   0,   0); }  // Dim red — stays on
 
 void rgb_led_fatal() {
     rgb_led_blink_code(BLINK_FATAL, 255, 0, 0);

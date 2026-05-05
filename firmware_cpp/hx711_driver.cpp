@@ -14,10 +14,14 @@ bool hx711_probe(uint8_t pin_data) {
 }
 
 int32_t hx711_read_raw(uint8_t pin_sck, uint8_t pin_data, bool channel_A) {
-    // Wait for DATA → LOW (conversion ready), 100ms timeout.
-    unsigned long deadline = millis() + 100;
-    while (digitalRead(pin_data) == HIGH) {
-        if (millis() > deadline) return 0;
+    // Non-blocking: if DATA is HIGH (no new sample ready), return last value.
+    // HX711 converts at 10Hz (100ms), so we'd block Core 1 for that long
+    // if we waited. Instead, return the previous sample and let the caller
+    // run at full speed — the next read will pick up the new value.
+    static int32_t last_value = 0;
+
+    if (digitalRead(pin_data) == HIGH) {
+        return last_value;  // No new conversion ready yet
     }
 
     // Disable interrupts during bit-bang clock-out to prevent timing jitter
@@ -55,6 +59,7 @@ int32_t hx711_read_raw(uint8_t pin_sck, uint8_t pin_data, bool channel_A) {
     // Sign-extend 24-bit two's complement → int32.
     if (value & 0x800000) value |= (int32_t)0xFF000000;
 
+    last_value = value;
     return value;
 }
 

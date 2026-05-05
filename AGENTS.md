@@ -70,6 +70,7 @@ USB identity: VID=0x239A (Adafruit/TinyUSB), PID=0xCAFE. Composite device: CDC s
 
 | Command | Response | Description |
 |---------|----------|-------------|
+| `CAL?` | `CAL <json>` | Read back current calibration as JSON |
 | `CAL <json>` | `CAL OK` / `CAL ERR` | Apply + persist calibration, reset EMA |
 | `REBOOT` | `OK` | Watchdog reboot into application |
 | `REBOOT BOOTSEL` | `OK` | Reboot into USB bootloader |
@@ -87,6 +88,8 @@ USB identity: VID=0x239A (Adafruit/TinyUSB), PID=0xCAFE. Composite device: CDC s
 - **Preview line:** Applies current slider settings locally in real time, no save needed
 - **Interactive curve editor:** Drag-to-edit control points; click to add, right-click to delete; presets
 - **Profiles:** Managed via serial PROFILE commands (GUI calls them in background thread)
+- **Load from Pico:** Sends `CAL?\n` over serial; firmware responds with `CAL <json>`; GUI populates all sliders from response
+- **Auto-load on startup:** GUI automatically queries Pico for current calibration on launch (silent on failure, falls back to defaults)
 - **Save flow:** Sends `CAL <json>\n` over serial (VID=0x239A/PID=0xCAFE); firmware applies immediately and persists
 
 ## calibration.json format

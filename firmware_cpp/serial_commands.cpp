@@ -74,6 +74,13 @@ bool serial_process_command(
     String cmd = line;
     cmd.trim();
 
+    // CAL? — read back current calibration as JSON
+    if (cmd == "CAL?") {
+        Serial.print("CAL ");
+        Serial.println(cal_to_json(cal));
+        return true;
+    }
+
     // CAL <json>
     if (cmd.startsWith("CAL ")) {
         String json = cmd.substring(4);

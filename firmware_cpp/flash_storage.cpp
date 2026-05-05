@@ -160,6 +160,10 @@ static bool load_from_path(const char* path, Calibration& cal_out) {
     return true;
 }
 
+String cal_to_json(const Calibration& cal) {
+    return to_json(cal);
+}
+
 // --- Public API ---
 
 bool flash_load_calibration(Calibration& cal_out) {

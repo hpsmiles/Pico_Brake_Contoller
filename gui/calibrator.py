@@ -239,6 +239,52 @@ def send_calibration_via_serial(cal_dict):
         return False, f"Serial error: {e}"
 
 
+def load_calibration_via_serial():
+    """Load current calibration from the Pico via the CAL? serial command.
+
+    Returns (True, cal_dict) on success, (False, error_message) on failure.
+    """
+    try:
+        import serial.tools.list_ports
+        import serial as pyserial
+    except ImportError:
+        return False, "pyserial not installed. Install with: pip install pyserial"
+
+    try:
+        port_path = find_pico_serial_port()
+        if not port_path:
+            return False, "Pico serial port not found"
+
+        ser = pyserial.Serial(port_path, baudrate=115200, timeout=2)
+        time.sleep(0.1)  # Wait for serial connection to settle
+
+        # Send "CAL?\n"
+        ser.write(b"CAL?\n")
+        ser.flush()
+
+        # Wait for response
+        time.sleep(0.2)
+        response = ser.read(ser.in_waiting or 4096).decode("utf-8", errors="replace").strip()
+        ser.close()
+
+        # Parse "CAL <json>" response
+        if not response.startswith("CAL "):
+            return False, f"Unexpected response: {response or 'none'}"
+
+        json_str = response[4:]  # Strip "CAL " prefix
+        try:
+            cal_dict = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            return False, f"JSON parse error: {e}"
+
+        return True, cal_dict
+
+    except pyserial.SerialTimeoutException:
+        return False, "Serial timeout — Pico may not be ready"
+    except Exception as e:
+        return False, f"Serial error: {e}"
+
+
 def reset_pico_via_hid():
     """Send a reset command to the Pico via HID Output Report.
 
@@ -577,143 +623,7 @@ class BrakeCalibrator(tk.Tk):
         del_btn.pack(side=tk.LEFT, padx=2)
         ToolTip(del_btn, "Delete the selected profile from CIRCUITPY.")
 
-        # Throttle section
-        self.throttle_frame = ttk.LabelFrame(right, text="Throttle", padding=5)
-        self.throttle_frame.pack(fill=tk.X, pady=(0, 5))
-
-        self.throttle_enabled_var = tk.BooleanVar(value=self.DEFAULTS["throttle_enabled"])
-        self.throttle_enabled_check = ttk.Checkbutton(
-            self.throttle_frame,
-            text="Use Throttle",
-            variable=self.throttle_enabled_var,
-            command=self._on_throttle_toggle,
-        )
-        self.throttle_enabled_check.pack(anchor=tk.W)
-        ToolTip(self.throttle_enabled_check, "Enable throttle pedal input on the Z/Rz axes.")
-        self.throttle_widgets.append(self.throttle_enabled_check)
-
-        self.throttle_sensor_label = ttk.Label(self.throttle_frame, text="Sensor: --")
-        self.throttle_sensor_label.pack(anchor=tk.W, pady=(5, 0))
-
-        # Throttle calibration controls container
-        self.throttle_controls_frame = ttk.Frame(self.throttle_frame)
-        self.throttle_controls_frame.pack(fill=tk.X, pady=(5, 0))
-        self.throttle_widgets.append(self.throttle_controls_frame)
-
-        # Throttle Manual Calibration
-        ttk.Label(self.throttle_controls_frame, text="Raw Min:").grid(row=0, column=0, sticky=tk.W)
-        self.throttle_raw_min_var = tk.IntVar(value=self.DEFAULTS["throttle_raw_min"])
-        self.throttle_raw_min_entry = ttk.Entry(
-            self.throttle_controls_frame, textvariable=self.throttle_raw_min_var, width=10
-        )
-        self.throttle_raw_min_entry.grid(row=0, column=1, padx=5)
-
-        throttle_set_min_btn = ttk.Button(self.throttle_controls_frame, text="Set Min", command=self._set_throttle_min)
-        throttle_set_min_btn.grid(row=0, column=2)
-        ToolTip(throttle_set_min_btn, "Set throttle raw_min to the current sensor reading.\nRelease pedal completely, then click.")
-
-        ttk.Label(self.throttle_controls_frame, text="Raw Max:").grid(row=1, column=0, sticky=tk.W)
-        self.throttle_raw_max_var = tk.IntVar(value=self.DEFAULTS["throttle_raw_max"])
-        self.throttle_raw_max_entry = ttk.Entry(
-            self.throttle_controls_frame, textvariable=self.throttle_raw_max_var, width=10
-        )
-        self.throttle_raw_max_entry.grid(row=1, column=1, padx=5)
-
-        throttle_set_max_btn = ttk.Button(self.throttle_controls_frame, text="Set Max", command=self._set_throttle_max)
-        throttle_set_max_btn.grid(row=1, column=2)
-        ToolTip(throttle_set_max_btn, "Set throttle raw_max to the current sensor reading.\nPress pedal firmly, then click.")
-
-        # Throttle Settings
-        ttk.Label(self.throttle_controls_frame, text="Curve:").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
-        self.throttle_curve_var = tk.StringVar(value=self.DEFAULTS["throttle_curve"])
-        throttle_curve_combo = ttk.Combobox(
-            self.throttle_controls_frame,
-            textvariable=self.throttle_curve_var,
-            values=self.CURVES,
-            state="readonly",
-            width=12,
-        )
-        throttle_curve_combo.grid(row=2, column=1, sticky=tk.W, pady=(5, 0))
-        ToolTip(throttle_curve_combo, "Select throttle response curve type.\n• Linear: 1:1 mapping\n• Progressive: exponential rise\n• Aggressive: fast initial response\n• Custom: editable control points")
-        throttle_preview_btn = ttk.Button(self.throttle_controls_frame, text="Preview", width=7,
-                    command=lambda: self._show_curve_dialog("throttle"))
-        throttle_preview_btn.grid(row=2, column=2, padx=(5, 0), pady=(5, 0))
-        ToolTip(throttle_preview_btn, "Open interactive curve editor for throttle.")
-
-        ttk.Label(self.throttle_controls_frame, text="Smoothing:").grid(row=3, column=0, sticky=tk.W)
-        self.throttle_smoothing_var = tk.DoubleVar(value=self.DEFAULTS["throttle_smoothing"])
-        throttle_smoothing_scale = ttk.Scale(
-            self.throttle_controls_frame,
-            from_=0.0,
-            to=0.95,
-            variable=self.throttle_smoothing_var,
-            orient=tk.HORIZONTAL,
-        )
-        throttle_smoothing_scale.grid(row=3, column=1, columnspan=2, sticky=tk.EW)
-        ToolTip(throttle_smoothing_scale, "Throttle signal smoothing. 0 = no filter, higher = more smoothing.\nHigher values reduce noise but add latency.")
-        self.throttle_smoothing_label = ttk.Label(
-            self.throttle_controls_frame, text=f"α = {self.DEFAULTS['throttle_smoothing']:.2f}"
-        )
-        self.throttle_smoothing_label.grid(row=4, column=0, columnspan=3, sticky=tk.W)
-        self.throttle_smoothing_var.trace_add("write", self._update_throttle_smoothing_label)
-
-        ttk.Label(self.throttle_controls_frame, text="Deadzone:").grid(row=5, column=0, sticky=tk.W)
-        self.throttle_deadzone_var = tk.IntVar(value=self.DEFAULTS["throttle_deadzone"])
-        throttle_deadzone_scale = ttk.Scale(
-            self.throttle_controls_frame,
-            from_=0,
-            to=1000,
-            variable=self.throttle_deadzone_var,
-            orient=tk.HORIZONTAL,
-        )
-        throttle_deadzone_scale.grid(row=5, column=1, columnspan=2, sticky=tk.EW)
-        ToolTip(throttle_deadzone_scale, "Ignore small throttle inputs near zero.\nEliminates drift from sensor noise at rest.")
-
-        self.throttle_invert_var = tk.BooleanVar(value=self.DEFAULTS["throttle_invert"])
-        throttle_invert_cb = ttk.Checkbutton(self.throttle_controls_frame, text="Invert", variable=self.throttle_invert_var)
-        throttle_invert_cb.grid(row=6, column=0, columnspan=3, sticky=tk.W)
-        ToolTip(throttle_invert_cb, "Invert throttle axis. Use if pedal reads 100% when released.")
-
-        ttk.Label(self.throttle_controls_frame, text="Saturation:").grid(row=7, column=0, sticky=tk.W)
-        self.throttle_saturation_var = tk.DoubleVar(value=self.DEFAULTS["throttle_saturation"])
-        throttle_saturation_scale = ttk.Scale(
-            self.throttle_controls_frame,
-            from_=0.1,
-            to=1.0,
-            variable=self.throttle_saturation_var,
-            orient=tk.HORIZONTAL,
-        )
-        throttle_saturation_scale.grid(row=7, column=1, columnspan=2, sticky=tk.EW)
-        ToolTip(throttle_saturation_scale, "Scale the effective max sensor value.\nLower values let you reach 100% with less pedal travel.")
-        self.throttle_saturation_label = ttk.Label(
-            self.throttle_controls_frame, text=f"{self.DEFAULTS['throttle_saturation']:.0%}"
-        )
-        self.throttle_saturation_label.grid(row=8, column=0, columnspan=3, sticky=tk.W)
-        self.throttle_saturation_var.trace_add("write", self._update_throttle_saturation_label)
-
-        ttk.Label(self.throttle_controls_frame, text="Bite Point:").grid(row=9, column=0, sticky=tk.W)
-        self.throttle_bite_point_var = tk.DoubleVar(value=self.DEFAULTS["throttle_bite_point"])
-        throttle_bite_point_scale = ttk.Scale(
-            self.throttle_controls_frame,
-            from_=0.0,
-            to=0.5,
-            variable=self.throttle_bite_point_var,
-            orient=tk.HORIZONTAL,
-        )
-        throttle_bite_point_scale.grid(row=9, column=1, columnspan=2, sticky=tk.EW)
-        ToolTip(throttle_bite_point_scale, "Dead-travel zone simulating pedal free-play.\nOutput stays at 0% until force exceeds this threshold.")
-        self.throttle_bite_point_label = ttk.Label(
-            self.throttle_controls_frame, text=f"{self.DEFAULTS['throttle_bite_point']:.0%}"
-        )
-        self.throttle_bite_point_label.grid(row=10, column=0, columnspan=3, sticky=tk.W)
-        self.throttle_bite_point_var.trace_add("write", self._update_throttle_bite_point_label)
-
-        # Throttle curve power (hidden from main UI, accessible via Preview dialog)
-        self.throttle_progressive_power_var = tk.DoubleVar(value=self.DEFAULTS["throttle_progressive_power"])
-        self.throttle_aggressive_power_var = tk.DoubleVar(value=self.DEFAULTS["throttle_aggressive_power"])
-        self.throttle_curve_points_var = [[0.0, 0.0], [1.0, 1.0]]
-
-        # Brake section (bottom)
+        # Brake section
         brake_frame = ttk.LabelFrame(right, text="Brake", padding=5)
         brake_frame.pack(fill=tk.X, pady=(0, 5))
 
@@ -842,12 +752,169 @@ class BrakeCalibrator(tk.Tk):
         self.brake_aggressive_power_var = tk.DoubleVar(value=self.DEFAULTS["aggressive_power"])
         self.brake_curve_points_var = [[0.0, 0.0], [1.0, 1.0]]
 
+        # --- Throttle section (under brake, toggled by checkbox) ---
+        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(5, 0))
+
+        self.throttle_enabled_var = tk.BooleanVar(value=self.DEFAULTS["throttle_enabled"])
+        self.throttle_enabled_check = ttk.Checkbutton(
+            right,
+            text="Use Throttle",
+            variable=self.throttle_enabled_var,
+            command=self._on_throttle_toggle,
+        )
+        self.throttle_enabled_check.pack(anchor=tk.W, pady=(5, 0))
+        ToolTip(self.throttle_enabled_check, "Enable throttle pedal input on the Z/Rz axes.")
+
+        # Throttle controls container (shown/hidden by toggle)
+        self.throttle_frame = ttk.Frame(right)
+        self.throttle_frame.pack(fill=tk.X, pady=(0, 5))
+
+        sensor_frame = ttk.Frame(self.throttle_frame)
+        sensor_frame.pack(anchor=tk.W, fill=tk.X)
+        ttk.Label(sensor_frame, text="Sensor:").pack(side=tk.LEFT)
+        self.throttle_sensor_var = tk.StringVar(value=self.DEFAULTS["throttle_sensor"])
+        self.throttle_sensor_combo = ttk.Combobox(
+            sensor_frame,
+            textvariable=self.throttle_sensor_var,
+            values=["auto", "hall", "hx711"],
+            state="readonly",
+            width=8,
+        )
+        self.throttle_sensor_combo.pack(side=tk.LEFT, padx=5)
+        ToolTip(self.throttle_sensor_combo, "Select throttle sensor type.\n• Auto: Use HX711 if detected, otherwise Hall Effect\n• Hall: Force SS49E Hall Effect sensor (ADC on GP27)\n• HX711: Force HX711 load cell (bit-bang on GP28/GP16)")
+        self.throttle_sensor_label = ttk.Label(self.throttle_frame, text="")
+        self.throttle_sensor_label.pack(anchor=tk.W, pady=(2, 0))
+
+        # Throttle calibration controls
+        self.throttle_controls_frame = ttk.Frame(self.throttle_frame)
+        self.throttle_controls_frame.pack(fill=tk.X, pady=(5, 0))
+
+        # Throttle Manual Calibration
+        ttk.Label(self.throttle_controls_frame, text="Raw Min:").grid(row=0, column=0, sticky=tk.W)
+        self.throttle_raw_min_var = tk.IntVar(value=self.DEFAULTS["throttle_raw_min"])
+        self.throttle_raw_min_entry = ttk.Entry(
+            self.throttle_controls_frame, textvariable=self.throttle_raw_min_var, width=10
+        )
+        self.throttle_raw_min_entry.grid(row=0, column=1, padx=5)
+
+        throttle_set_min_btn = ttk.Button(self.throttle_controls_frame, text="Set Min", command=self._set_throttle_min)
+        throttle_set_min_btn.grid(row=0, column=2)
+        ToolTip(throttle_set_min_btn, "Set throttle raw_min to the current sensor reading.\nRelease pedal completely, then click.")
+
+        ttk.Label(self.throttle_controls_frame, text="Raw Max:").grid(row=1, column=0, sticky=tk.W)
+        self.throttle_raw_max_var = tk.IntVar(value=self.DEFAULTS["throttle_raw_max"])
+        self.throttle_raw_max_entry = ttk.Entry(
+            self.throttle_controls_frame, textvariable=self.throttle_raw_max_var, width=10
+        )
+        self.throttle_raw_max_entry.grid(row=1, column=1, padx=5)
+
+        throttle_set_max_btn = ttk.Button(self.throttle_controls_frame, text="Set Max", command=self._set_throttle_max)
+        throttle_set_max_btn.grid(row=1, column=2)
+        ToolTip(throttle_set_max_btn, "Set throttle raw_max to the current sensor reading.\nPress pedal firmly, then click.")
+
+        # Throttle Settings
+        ttk.Label(self.throttle_controls_frame, text="Curve:").grid(row=2, column=0, sticky=tk.W, pady=(5, 0))
+        self.throttle_curve_var = tk.StringVar(value=self.DEFAULTS["throttle_curve"])
+        throttle_curve_combo = ttk.Combobox(
+            self.throttle_controls_frame,
+            textvariable=self.throttle_curve_var,
+            values=self.CURVES,
+            state="readonly",
+            width=12,
+        )
+        throttle_curve_combo.grid(row=2, column=1, sticky=tk.W, pady=(5, 0))
+        ToolTip(throttle_curve_combo, "Select throttle response curve type.\n• Linear: 1:1 mapping\n• Progressive: exponential rise\n• Aggressive: fast initial response\n• Custom: editable control points")
+        throttle_preview_btn = ttk.Button(self.throttle_controls_frame, text="Preview", width=7,
+                    command=lambda: self._show_curve_dialog("throttle"))
+        throttle_preview_btn.grid(row=2, column=2, padx=(5, 0), pady=(5, 0))
+        ToolTip(throttle_preview_btn, "Open interactive curve editor for throttle.")
+
+        ttk.Label(self.throttle_controls_frame, text="Smoothing:").grid(row=3, column=0, sticky=tk.W)
+        self.throttle_smoothing_var = tk.DoubleVar(value=self.DEFAULTS["throttle_smoothing"])
+        throttle_smoothing_scale = ttk.Scale(
+            self.throttle_controls_frame,
+            from_=0.0,
+            to=0.95,
+            variable=self.throttle_smoothing_var,
+            orient=tk.HORIZONTAL,
+        )
+        throttle_smoothing_scale.grid(row=3, column=1, columnspan=2, sticky=tk.EW)
+        ToolTip(throttle_smoothing_scale, "Throttle signal smoothing. 0 = no filter, higher = more smoothing.\nHigher values reduce noise but add latency.")
+        self.throttle_smoothing_label = ttk.Label(
+            self.throttle_controls_frame, text=f"α = {self.DEFAULTS['throttle_smoothing']:.2f}"
+        )
+        self.throttle_smoothing_label.grid(row=4, column=0, columnspan=3, sticky=tk.W)
+        self.throttle_smoothing_var.trace_add("write", self._update_throttle_smoothing_label)
+
+        ttk.Label(self.throttle_controls_frame, text="Deadzone:").grid(row=5, column=0, sticky=tk.W)
+        self.throttle_deadzone_var = tk.IntVar(value=self.DEFAULTS["throttle_deadzone"])
+        throttle_deadzone_scale = ttk.Scale(
+            self.throttle_controls_frame,
+            from_=0,
+            to=1000,
+            variable=self.throttle_deadzone_var,
+            orient=tk.HORIZONTAL,
+        )
+        throttle_deadzone_scale.grid(row=5, column=1, columnspan=2, sticky=tk.EW)
+        ToolTip(throttle_deadzone_scale, "Ignore small throttle inputs near zero.\nEliminates drift from sensor noise at rest.")
+
+        self.throttle_invert_var = tk.BooleanVar(value=self.DEFAULTS["throttle_invert"])
+        throttle_invert_cb = ttk.Checkbutton(self.throttle_controls_frame, text="Invert", variable=self.throttle_invert_var)
+        throttle_invert_cb.grid(row=6, column=0, columnspan=3, sticky=tk.W)
+        ToolTip(throttle_invert_cb, "Invert throttle axis. Use if pedal reads 100% when released.")
+
+        ttk.Label(self.throttle_controls_frame, text="Saturation:").grid(row=7, column=0, sticky=tk.W)
+        self.throttle_saturation_var = tk.DoubleVar(value=self.DEFAULTS["throttle_saturation"])
+        throttle_saturation_scale = ttk.Scale(
+            self.throttle_controls_frame,
+            from_=0.1,
+            to=1.0,
+            variable=self.throttle_saturation_var,
+            orient=tk.HORIZONTAL,
+        )
+        throttle_saturation_scale.grid(row=7, column=1, columnspan=2, sticky=tk.EW)
+        ToolTip(throttle_saturation_scale, "Scale the effective max sensor value.\nLower values let you reach 100% with less pedal travel.")
+        self.throttle_saturation_label = ttk.Label(
+            self.throttle_controls_frame, text=f"{self.DEFAULTS['throttle_saturation']:.0%}"
+        )
+        self.throttle_saturation_label.grid(row=8, column=0, columnspan=3, sticky=tk.W)
+        self.throttle_saturation_var.trace_add("write", self._update_throttle_saturation_label)
+
+        ttk.Label(self.throttle_controls_frame, text="Bite Point:").grid(row=9, column=0, sticky=tk.W)
+        self.throttle_bite_point_var = tk.DoubleVar(value=self.DEFAULTS["throttle_bite_point"])
+        throttle_bite_point_scale = ttk.Scale(
+            self.throttle_controls_frame,
+            from_=0.0,
+            to=0.5,
+            variable=self.throttle_bite_point_var,
+            orient=tk.HORIZONTAL,
+        )
+        throttle_bite_point_scale.grid(row=9, column=1, columnspan=2, sticky=tk.EW)
+        ToolTip(throttle_bite_point_scale, "Dead-travel zone simulating pedal free-play.\nOutput stays at 0% until force exceeds this threshold.")
+        self.throttle_bite_point_label = ttk.Label(
+            self.throttle_controls_frame, text=f"{self.DEFAULTS['throttle_bite_point']:.0%}"
+        )
+        self.throttle_bite_point_label.grid(row=10, column=0, columnspan=3, sticky=tk.W)
+        self.throttle_bite_point_var.trace_add("write", self._update_throttle_bite_point_label)
+
+        # Throttle curve power (hidden from main UI, accessible via Preview dialog)
+        self.throttle_progressive_power_var = tk.DoubleVar(value=self.DEFAULTS["throttle_progressive_power"])
+        self.throttle_aggressive_power_var = tk.DoubleVar(value=self.DEFAULTS["throttle_aggressive_power"])
+        self.throttle_curve_points_var = [[0.0, 0.0], [1.0, 1.0]]
+
         # Save button
         self.save_btn = ttk.Button(
             right, text="Save to Pico", command=self._save_calibration
         )
         self.save_btn.pack(fill=tk.X, pady=(5, 0))
         ToolTip(self.save_btn, "Send calibration to Pico via serial.\nApplies immediately — no reboot needed.")
+
+        # Load from Pico button
+        self.load_btn = ttk.Button(
+            right, text="Load from Pico", command=self._load_calibration
+        )
+        self.load_btn.pack(fill=tk.X, pady=(2, 0))
+        ToolTip(self.load_btn, "Load current calibration from Pico via serial.\nUpdates all sliders to match device settings.")
 
         # Status bar
         self.status_var = tk.StringVar(value="Initializing...")
@@ -859,18 +926,21 @@ class BrakeCalibrator(tk.Tk):
         # Initial throttle state
         self._on_throttle_toggle()
 
+        # Auto-load calibration from Pico on startup (silent if no Pico found)
+        self.after(500, self._auto_load_calibration)
+
     def _on_throttle_toggle(self):
         """Handle throttle enable/disable toggle."""
         enabled = self.throttle_enabled_var.get()
 
         # Show/hide throttle controls and graph
         if enabled:
-            self.throttle_controls_frame.pack(fill=tk.X, pady=(5, 0))
+            self.throttle_frame.pack(fill=tk.X, pady=(0, 5))
             self.throttle_frame_graph.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 0))
             self.brake_frame.config(text="Live Brake Pressure")
             self.title("Brake & Throttle Calibrator")
         else:
-            self.throttle_controls_frame.pack_forget()
+            self.throttle_frame.pack_forget()
             self.throttle_frame_graph.pack_forget()
             self.brake_frame.config(text="Live Brake Pressure")
             self.title("Brake Controller Calibrator")
@@ -1555,7 +1625,7 @@ class BrakeCalibrator(tk.Tk):
             "bite_point": round(self.bite_point_var.get(), 2),
             "curve_points": self.brake_curve_points_var if self.brake_curve_points_var else [[0.0, 0.0], [1.0, 1.0]],
             "throttle_enabled": self.throttle_enabled_var.get(),
-            "throttle_sensor": self.DEFAULTS["throttle_sensor"],
+            "throttle_sensor": self.throttle_sensor_var.get(),
             "throttle_raw_min": self.throttle_raw_min_var.get(),
             "throttle_raw_max": self.throttle_raw_max_var.get(),
             "throttle_deadzone": self.throttle_deadzone_var.get(),
@@ -1592,6 +1662,7 @@ class BrakeCalibrator(tk.Tk):
         self.brake_curve_points_var = cal.get("curve_points", [[0.0, 0.0], [1.0, 1.0]])
 
         safe_set(self.throttle_enabled_var, "throttle_enabled", False)
+        safe_set(self.throttle_sensor_var, "throttle_sensor", "auto")
         safe_set(self.throttle_raw_min_var, "throttle_raw_min", 2000, int)
         safe_set(self.throttle_raw_max_var, "throttle_raw_max", 56000, int)
         safe_set(self.throttle_deadzone_var, "throttle_deadzone", 300, int)
@@ -1701,6 +1772,51 @@ class BrakeCalibrator(tk.Tk):
             self.after(0, on_done)
 
         threading.Thread(target=do_save, daemon=True).start()
+
+    def _load_calibration(self):
+        """Load calibration from the Pico via serial CAL? command.
+
+        Runs in a background thread to avoid freezing the GUI.
+        On success, applies the loaded calibration to all GUI controls.
+        """
+        self.load_btn.config(state=tk.DISABLED, text="Loading...")
+        self.status_var.set("Loading calibration from Pico...")
+
+        def do_load():
+            ok, result = load_calibration_via_serial()
+
+            def on_done():
+                if ok:
+                    self._apply_cal_dict(result)
+                    messagebox.showinfo("Loaded", "Calibration loaded from Pico.\nAll sliders updated to match device settings.")
+                else:
+                    messagebox.showerror(
+                        "Error",
+                        f"Could not load calibration from Pico:\n{result}\n\n"
+                        "Make sure the Pico is connected via USB.\n"
+                        "Install pyserial: pip install pyserial",
+                    )
+                self.load_btn.config(state=tk.NORMAL, text="Load from Pico")
+                self._update_status()
+
+            self.after(0, on_done)
+
+        threading.Thread(target=do_load, daemon=True).start()
+
+    def _auto_load_calibration(self):
+        """Auto-load calibration from Pico on startup. Silent on failure."""
+        def do_load():
+            ok, result = load_calibration_via_serial()
+
+            def on_done():
+                if ok:
+                    self._apply_cal_dict(result)
+                    self.status_var.set("Loaded calibration from Pico")
+                # Silent on failure — just keep defaults
+
+            self.after(0, on_done)
+
+        threading.Thread(target=do_load, daemon=True).start()
 
     def _draw_graph(self):
         """Draw the live pressure graphs — brake and throttle on separate canvases."""
@@ -1860,15 +1976,15 @@ class BrakeCalibrator(tk.Tk):
             else:
                 self.throttle_norm_label.config(text="Throttle: --")
 
-            # Update sensor type label based on whether we get non-zero values
+            # Update sensor type label based on current setting
             if throttle_raw_val_int and throttle_raw_val_int > 100:
-                # Show sensor type - firmware auto-detects, we show what was configured or auto
-                sensor_config = self.DEFAULTS.get("throttle_sensor", "auto")
+                sensor_config = self.throttle_sensor_var.get()
                 if sensor_config == "auto":
                     self.throttle_sensor_label.config(text="Sensor: Auto-detected")
-                else:
-                    sensor_name = "Hall Effect" if sensor_config == "hall" else "HX711 Load Cell"
-                    self.throttle_sensor_label.config(text=f"Sensor: {sensor_name}")
+                elif sensor_config == "hall":
+                    self.throttle_sensor_label.config(text="Sensor: Hall Effect")
+                elif sensor_config == "hx711":
+                    self.throttle_sensor_label.config(text="Sensor: HX711 Load Cell")
 
         # Process auto-calibration
         self._process_auto_cal()
